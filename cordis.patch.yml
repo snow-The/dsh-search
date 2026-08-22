@@ -1,0 +1,14 @@
+- id: snow-the-dsh-search
+  insert:
+    - - snow-the-dsh-search
+      - type: object
+        properties:
+          queryTools:
+            type: boolean
+            default: true
+          githubSearch:
+            type: boolean
+            default: true
+          httpPort:
+            type: string
+            default: ""

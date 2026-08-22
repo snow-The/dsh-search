@@ -1,0 +1,44 @@
+{
+  "name": "@snow-the/dsh-search",
+  "version": "0.1.0",
+  "description": "Universal search toolkit for DeepSeek Harness: browser-less page fetch, first-party GitHub search (repos/code/issues/commits, no Google), and an ephemeral SQLite vector corpus with ARK embeddings + local fallback.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "search",
+    "github",
+    "vector",
+    "deepseek-harness"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:@deepseek-ai/* --log-level=warning",
+    "test": "node --test"
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/snow-The/dsh-search.git"
+  },
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "hono": "^4.13.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}
