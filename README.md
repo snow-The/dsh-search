@@ -25,6 +25,15 @@ Universal search toolkit for DeepSeek Harness — browser-less, GPU-free, works 
 
 `lang:ts stars:>100`, `repo:owner/name`, `org:google`, `is:issue is:open` — anything the GitHub search API accepts.
 
+## Search methodology
+
+The plugin ships with a distilled search methodology extracted from 3 professional books (OCR, line-cited):
+
+- [`docs/search-methods.md`](./docs/search-methods.md) — quick reference: operators, engine architecture, investigation workflow, and how each maps to the tools
+- [`docs/book-osint-techniques.md`](./docs/book-osint-techniques.md) — OSINT Techniques 11th: Google/X-Twitter operators, platform lists, recon workflow (110+ items)
+- [`docs/book-ai-powered-search.md`](./docs/book-ai-powered-search.md) — AI-Powered Search: signal boosting, semantic/dense-vector search, ANN, quantization, RRF hybrid ranking (138 items)
+- [`docs/book-bellingcat.md`](./docs/book-bellingcat.md) — We Are Bellingcat: verification workflows, geolocation, disinformation defense (70+ items)
+
 ## Install
 
 Add `@snow-the/dsh-search` to your profile `dependencies` and `dsh.profile.bundles`, then `pnpm install` + restart.
