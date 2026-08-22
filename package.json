@@ -1,6 +1,6 @@
 {
   "name": "@snow-the/dsh-search",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Universal search toolkit for DeepSeek Harness: browser-less page fetch, first-party GitHub search (repos/code/issues/commits, no Google), and an ephemeral SQLite vector corpus with ARK embeddings + local fallback.",
   "type": "module",
   "main": "./dist/index.js",

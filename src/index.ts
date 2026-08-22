@@ -141,6 +141,80 @@ export async function apply(ctx: any) {
     },
   }));
 
+
+  // --- search_probe ---
+  ctx.tools.register(defineTool({
+    name: 'search_probe',
+    description: 'Deep-web probe: mine content search engines cannot reach — Hacker News (Algolia), Reddit (JSON API), forum search endpoints (phpBB/XenForo/Flarum/Discourse/vBulletin), and RSSHub feeds (public https://rsshub.app or DSH_SEARCH_RSSHUB_URL). Returns items per source with deduped links.',
+    parameters: {
+      q: { type: 'string', required: true, description: 'search query' },
+      targets: { type: 'string', required: false, description: 'all | hn | reddit | forum | comma-mix (default all)' },
+      forumBase: { type: 'string', required: false, description: 'forum base URL to mine (e.g. https://forum.example.com)' },
+      subreddit: { type: 'string', required: false, description: 'restrict Reddit to a subreddit' },
+      maxPerSource: { type: 'number', required: false, description: 'items per source (default 10)' },
+    },
+    output: textOut,
+    timeoutMs: 60000,
+    async execute(args: any) {
+      const q = String(args?.q ?? '').trim();
+      if (!q) throw new Error('q required');
+      const { probeAll } = await import('./probe.js');
+      const result = await probeAll(q, {
+        targets: args?.targets ? String(args.targets) : undefined,
+        forumBase: args?.forumBase ? String(args.forumBase) : undefined,
+        subreddit: args?.subreddit ? String(args.subreddit) : undefined,
+        maxPerSource: Number(args?.maxPerSource) || 10,
+      });
+      const lines: string[] = ['Probe: ' + q, ''];
+      let total = 0;
+      for (const s of result.sources) {
+        lines.push('## ' + s.label + (s.error ? ' [error: ' + s.error + ']' : ''));
+        for (const item of s.items) {
+          total++;
+          lines.push('- ' + item.title.slice(0, 140));
+          lines.push('  ' + item.link);
+          if (item.description) lines.push('  ' + item.description.slice(0, 200));
+        }
+        lines.push('');
+      }
+      lines.push('items: ' + total + ' | deduped links: ' + result.dedupedLinks.length);
+      return lines.join('\n');
+    },
+  }));
+
+  // --- search_deep ---
+  ctx.tools.register(defineTool({
+    name: 'search_deep',
+    description: 'Agentic deep-web investigation: plan -> parallel probe (HN/Reddit/forums/RSSHub) -> reflect -> synthesize with [n] citation anchors. Unlike plain search it digs into forums and communities search engines cannot index. Requires ctx.llm (host LLM). maxIterations 1-5, maxQueries 1-10, depth light (snippets) | deep (full-page fetch).',
+    parameters: {
+      question: { type: 'string', required: true, description: 'the research question' },
+      maxIterations: { type: 'number', required: false, description: '1-5 (default 3)' },
+      maxQueries: { type: 'number', required: false, description: '1-10 (default 4)' },
+      depth: { type: 'string', required: false, description: 'light | deep (default light)' },
+      targets: { type: 'string', required: false, description: 'all | hn | reddit | forum | mix' },
+      forumBase: { type: 'string', required: false, description: 'forum URL to mine' },
+      subreddit: { type: 'string', required: false, description: 'Reddit subreddit filter' },
+    },
+    output: textOut,
+    timeoutMs: 300000,
+    async execute(args: any) {
+      const question = String(args?.question ?? '').trim();
+      if (!question) throw new Error('question required');
+      const llm: any = ctx.llm;
+      if (!llm?.stream) throw new Error('ctx.llm not available — search_deep needs the host LLM service');
+      const { deepSearch } = await import('./deepsearch.js');
+      const res = await deepSearch(llm, question, {
+        maxIterations: Number(args?.maxIterations) || 3,
+        maxQueries: Number(args?.maxQueries) || 4,
+        depth: args?.depth === 'deep' ? 'deep' : 'light',
+        targets: args?.targets ? String(args.targets) : undefined,
+        forumBase: args?.forumBase ? String(args.forumBase) : undefined,
+        subreddit: args?.subreddit ? String(args.subreddit) : undefined,
+      });
+      return 'iterations: ' + res.iterations + ' | queries: ' + res.queries.length + ' | sources: ' + res.sources.length + '\n\n' + res.answer;
+    },
+  }));
+
   // optional hono HTTP daemon
   const stop = maybeStartServer();
   if (stop) {
