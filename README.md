@@ -16,7 +16,7 @@ Universal search toolkit for DeepSeek Harness — browser-less, GPU-free, works 
 
 - **TypeScript + hono** (tsc + esbuild build, same pattern as dsh-gitkit)
 - Precompiled regexes, prepared SQLite statements, **float32 BLOB vectors** (4 bytes/dim vs JSON strings), sentence-aware chunking with overlap, batched ARK embeddings (16/batch)
-- Embeddings: ARK `doubao-embedding-large` when `ARK_API_KEY` present (`DSH_BROWSER_EMBED_MODEL` overridable); local 64-dim n-gram hash fallback — offline-safe
+- Embeddings: ARK `doubao-embedding-large` when `ARK_API_KEY` present (search_code semantic layer; pure-local BM25+rerank core works with **no key and no network**) (`DSH_BROWSER_EMBED_MODEL` overridable); local 64-dim n-gram hash fallback — offline-safe
 - GitHub token: `GITHUB_TOKEN`/`GH_PAT` env or `~/.dsh/.credentials.yaml` refs (line-based parse). Code search requires auth (GitHub rule). Unauthenticated: 10 req/min
 - Optional local HTTP API via hono: set `DSH_SEARCH_HTTP_PORT` (loopback only):
   - `GET /health`, `GET /fetch?url=`, `GET /github?q=&type=repo|code|issue|commit`, `POST /corpus {urls}`, `GET /corpus/search?q=&k=`, `DELETE /corpus`

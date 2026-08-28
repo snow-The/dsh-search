@@ -17,6 +17,51 @@ export const name = 'dsh-search';
 export const inject = { config: { queryTools: true, githubSearch: true, httpPort: process.env.DSH_SEARCH_HTTP_PORT ?? '' } };
 
 export async function apply(ctx: any) {
+  // --- search_code: local codebase semantic/lexical search (semble-inspired) ---
+  ctx.tools.register(defineTool({
+    name: 'search_code',
+    description: 'Search a local codebase with a natural-language or symbol query (semble-style: BM25 + identifier tokens + definition-aware reranking; ARK semantic layer when ARK_API_KEY is present, local hash otherwise). Returns precise file:line snippets so you do not need grep+read to find code. Filter syntax: +"word" required, -"word" excluded, file:"glob" (e.g. +"auth" file:"*.ts"). Index is cached at ~/.dsh/search-index/ and refreshed incrementally on file changes.',
+    parameters: {
+      path: { type: 'string', required: true, description: 'absolute path to the codebase root' },
+      query: { type: 'string', required: true, description: 'natural-language or symbol query, e.g. "how is authentication handled" or "parseConfig"' },
+      topK: { type: 'number', required: false, description: 'max results (default 10, max 30)' },
+      maxSnippetLines: { type: 'number', required: false, description: 'lines of content per result (default 0 = file:line only; N = first N lines; -1 = full chunk)' },
+      filter: { type: 'string', required: false, description: 'khoj-style filter: +"word" -"word" file:"glob"' },
+      rebuild: { type: 'boolean', required: false, description: 'force full index rebuild (default false)' },
+    },
+    output: textOut,
+    timeoutMs: 300000,
+    async execute(args: any) {
+      const path = String(args?.path ?? '').trim();
+      const query = String(args?.query ?? '').trim();
+      if (!path) throw new Error('path required');
+      if (!query) throw new Error('query required');
+      const { searchCode } = await import('./code/search.js');
+      const hits = await searchCode({
+        path,
+        query,
+        topK: Number(args?.topK) || 10,
+        filter: args?.filter ? String(args.filter) : undefined,
+        rebuild: args?.rebuild === true,
+      });
+      if (!hits.length) return 'No results for: ' + query;
+      const maxLines = Number(args?.maxSnippetLines ?? 0);
+      const lines: string[] = ['Code search: ' + query + ' (' + hits.length + ' hits)', ''];
+      for (let i = 0; i < hits.length; i++) {
+        const h = hits[i];
+        lines.push('[' + (i + 1) + '] ' + h.filePath + ':' + h.startLine + '-' + h.endLine + '  (score ' + h.score.toFixed(3) + ')');
+        if (maxLines > 0) {
+          const content = h.content.split('\n').slice(0, maxLines).join('\n');
+          lines.push(content);
+        } else if (maxLines < 0) {
+          lines.push(h.content);
+        }
+        lines.push('');
+      }
+      return lines.join('\n');
+    },
+  }));
+
   // --- search_fetch ---
   ctx.tools.register(defineTool({
     name: 'search_fetch',
