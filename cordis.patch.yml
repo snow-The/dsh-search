@@ -1,14 +1,9 @@
-- id: snow-the-dsh-search
+- op: insert
+  path: /services?
+  id: dsh-search
+  name: dsh-search
   insert:
-    - - snow-the-dsh-search
-      - type: object
-        properties:
-          queryTools:
-            type: boolean
-            default: true
-          githubSearch:
-            type: boolean
-            default: true
-          httpPort:
-            type: string
-            default: ""
+    - id: dsh-search
+      name: "@snow-the/dsh-search"
+  config:
+    bundle: "@snow-the/dsh-search"

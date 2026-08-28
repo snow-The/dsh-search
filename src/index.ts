@@ -14,7 +14,7 @@ import { maybeStartServer } from './server.js';
 const textOut = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] };
 
 export const name = 'dsh-search';
-export const inject = { config: { queryTools: true, githubSearch: true, httpPort: process.env.DSH_SEARCH_HTTP_PORT ?? '' } };
+export const inject = ['tools'];
 
 export async function apply(ctx: any) {
   // --- search_code: local codebase semantic/lexical search (semble-inspired) ---
