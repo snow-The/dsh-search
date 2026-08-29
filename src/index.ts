@@ -9,6 +9,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { extractText, chunkText, embedTexts, getStore, resetStore } from './query.js';
 import { githubSearch, githubToken, type GitHubKind } from './github.js';
+import { arxivSearchBatch, formatPapers } from './arxiv.js';
 import { maybeStartServer } from './server.js';
 
 const textOut = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] };
@@ -117,6 +118,37 @@ export async function apply(ctx: any) {
         lines.push('');
       }
       return lines.join('\n');
+    },
+  }));
+
+
+  // --- search_arxiv: arXiv API (papers, no browser needed) ---
+  ctx.tools.register(defineTool({
+    name: 'search_arxiv',
+    description: 'Search arXiv papers via the official export API (Atom, no key). Supports arXiv query syntax: field prefixes all:/ti:/au:/abs:/cat:, boolean AND/OR/ANDNOT, quoted phrases (e.g. all:"mean-shift" AND all:"representation learning" OR ti:distillation). Pass multiple queries to cover several angles of one research question — each query is rate-limited politely (arXiv requires ~3s between calls). Returns id, title, authors, categories, published date, abstract, abs URL per hit.',
+    parameters: {
+      queries: { type: 'array', required: true, description: '1-8 arXiv search_query strings (see syntax above)' },
+      maxResultsPerQuery: { type: 'number', required: false, description: 'max hits per query (default 5, max 20)' },
+      sortBy: { type: 'string', required: false, description: 'relevance (default) | recent' },
+      summaryChars: { type: 'number', required: false, description: 'abstract chars per paper (default 280)' },
+    },
+    output: textOut,
+    timeoutMs: 120000,
+    async execute(args: any) {
+      const queries = Array.isArray(args?.queries) ? args.queries.filter((q: unknown) => typeof q === 'string' && q.trim().length > 0).map((q: unknown) => String(q).trim()) : [];
+      if (!queries.length) throw new Error('queries required (1-8 strings)');
+      if (queries.length > 8) throw new Error('max 8 queries per call');
+      const maxResults = Math.min(Number(args?.maxResultsPerQuery) || 5, 20);
+      const sortBy = (args?.sortBy === 'recent' ? 'submittedDate' : 'relevance') as 'relevance' | 'submittedDate';
+      const summaryChars = Number(args?.summaryChars) || 280;
+      const results = await arxivSearchBatch(queries, { maxResults, sortBy });
+      const parts: string[] = [];
+      let total = 0;
+      for (const r of results) {
+        parts.push(formatPapers(r, summaryChars));
+        total += r.papers.length;
+      }
+      return total === 0 ? 'No results for any query.' : parts.join('\n\n----------\n\n');
     },
   }));
 
