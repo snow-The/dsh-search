@@ -19,6 +19,14 @@ export const name = 'dsh-search';
 export const inject = ['tools', 'web'];
 
 export async function apply(ctx: any) {
+  console.log('[dsh-search] apply called, ctx.web =', !!ctx.web, ', registerSearchProvider =', typeof (ctx.web as any)?.registerSearchProvider);
+  const searchCfg = (): SearchConfig => ({
+    provider: process.env.DSH_SEARCH_PROVIDER || 'bing',
+    cache: true,
+    cacheTtl: 5});
+  // provider 注册放最前：任何工具注册失败都不阻断 web 搜索 provider
+  registerWebProvider(ctx, searchCfg);
+  registerPlatformSearchTool(ctx, searchCfg);
   // --- search_code: local codebase semantic/lexical search (semble-inspired) ---
   ctx.tools.register(defineTool({
     name: 'search_code',
@@ -274,13 +282,7 @@ export async function apply(ctx: any) {
 
   // --- v0.4 web search provider (Bing/DDG/SearXNG free; Exa/Tavily keyed) ---
   // Config: env EXA_API_KEY / TAVILY_API_KEY; optional env DSH_SEARCH_PROVIDER (default engine)
-  const searchCfg = (): SearchConfig => ({
-    provider: process.env.DSH_SEARCH_PROVIDER || 'bing',
-    cache: true,
-    cacheTtl: 5});
-  registerWebProvider(ctx, searchCfg);
-  registerPlatformSearchTool(ctx, searchCfg);
-
+  
   // optional hono HTTP daemon
   const stop = maybeStartServer();
   if (stop) {

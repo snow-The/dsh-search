@@ -487,16 +487,20 @@ export function registerWebProvider(ctx: any, cfg: () => SearchConfig): void {
   // 不要用 ctx.inject(['web'], ...)——"web" 不是 cordis service（settings/webServer 才是），
   // 回调永远不会触发，导致 provider 未注册（"configured web provider ... is not registered"）。
   if (!ctx.web || typeof ctx.web.registerSearchProvider !== 'function') {
-    console.warn('[dsh-search] ctx.web.registerSearchProvider unavailable, provider NOT registered');
+    console.warn('[dsh-search] ctx.web.registerSearchProvider unavailable (ctx.web=' + !!ctx.web + '), provider NOT registered');
     return;
   }
+  console.log('[dsh-search] registering provider dsh-search');
   const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
+  console.log('[dsh-search] provider registered OK');
   try {
     if (!ctx.web.searchProviderId) {
       ctx.web.searchProviderId = 'dsh-search';
     }
   } catch { /* runtime override not supported on this version */ }
-  if (typeof ctx.onDispose === 'function') {
-    ctx.onDispose(() => { try { disposer(); } catch { /* noop */ } });
-  }
+  try {
+    if (typeof ctx.onDispose === 'function') {
+      ctx.onDispose(() => { try { disposer(); } catch { /* noop */ } });
+    }
+  } catch { /* onDispose requires inject on some hosts; registration already succeeded */ }
 }

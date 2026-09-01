@@ -1,6 +1,6 @@
 {
   "name": "@snow-the/dsh-search",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Universal search toolkit for DeepSeek Harness: unified web search provider (Bing/DDG/SearXNG/Exa/Tavily with fallback chain + cache), page fetch, GitHub search, vector corpus, deep-web probe + local codebase semantic search (search_code).",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,9 +1,4 @@
-- op: insert
-  path: /services?
-  id: dsh-search
-  name: dsh-search
-  insert:
+# dsh-search v0.4: unified web search provider (bing/ddg/searxng/exa/tavily + fallback chain)
+- insert:
     - id: dsh-search
       name: "@snow-the/dsh-search"
-  config:
-    bundle: "@snow-the/dsh-search"
