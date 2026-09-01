@@ -11,6 +11,7 @@ import { extractText, chunkText, embedTexts, getStore, resetStore } from './quer
 import { githubSearch, githubToken, type GitHubKind } from './github.js';
 import { arxivSearchBatch, formatPapers } from './arxiv.js';
 import { maybeStartServer } from './server.js';
+import { registerWebProvider, registerPlatformSearchTool, type SearchConfig } from './websearch.js';
 
 const textOut = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] };
 
@@ -291,6 +292,16 @@ export async function apply(ctx: any) {
       return 'iterations: ' + res.iterations + ' | queries: ' + res.queries.length + ' | sources: ' + res.sources.length + '\n\n' + res.answer;
     },
   }));
+
+  // --- v0.4 web search provider (Bing/DDG/SearXNG free; Exa/Tavily keyed) ---
+  // Config: env EXA_API_KEY / TAVILY_API_KEY; optional env DSH_SEARCH_PROVIDER (default engine)
+  const searchCfg = (): SearchConfig => ({
+    provider: process.env.DSH_SEARCH_PROVIDER || 'bing',
+    cache: true,
+    cacheTtl: 5,
+  });
+  registerWebProvider(ctx, searchCfg);
+  registerPlatformSearchTool(ctx, searchCfg);
 
   // optional hono HTTP daemon
   const stop = maybeStartServer();
