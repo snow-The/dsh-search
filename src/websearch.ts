@@ -465,7 +465,7 @@ export function registerPlatformSearchTool(ctx: any, cfg: () => SearchConfig): v
       engine: { type: 'string', description: 'engine override: bing | ddg | ddg-lite | searxng | exa | tavily (default: auto)' },
       maxResults: { type: 'number', description: 'max results (default 5, max 20)' },
       timeRange: { type: 'string', description: 'time filter: "day" | "week" | "month" | "year" or "3d"/"2w"/"1m"' }},
-    output: { schema: { type: 'json' } },
+    output: { schema: { type: 'json' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
     timeoutMs: 60000,
     async execute(args: any) {
       const out = await runSearchChain({
