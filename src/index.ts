@@ -16,7 +16,7 @@ import { registerWebProvider, registerPlatformSearchTool, type SearchConfig } fr
 const textOut = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] };
 
 export const name = 'dsh-search';
-export const inject = ['tools'];
+export const inject = ['tools', 'web'];
 
 export async function apply(ctx: any) {
   // --- search_code: local codebase semantic/lexical search (semble-inspired) ---
