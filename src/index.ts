@@ -26,11 +26,10 @@ export async function apply(ctx: any) {
     parameters: {
       path: { type: 'string', required: true, description: 'absolute path to the codebase root' },
       query: { type: 'string', required: true, description: 'natural-language or symbol query, e.g. "how is authentication handled" or "parseConfig"' },
-      topK: { type: 'number', required: false, description: 'max results (default 10, max 30)' },
-      maxSnippetLines: { type: 'number', required: false, description: 'lines of content per result (default 0 = file:line only; N = first N lines; -1 = full chunk)' },
-      filter: { type: 'string', required: false, description: 'khoj-style filter: +"word" -"word" file:"glob"' },
-      rebuild: { type: 'boolean', required: false, description: 'force full index rebuild (default false)' },
-    },
+      topK: { type: 'number', description: 'max results (default 10, max 30)' },
+      maxSnippetLines: { type: 'number', description: 'lines of content per result (default 0 = file:line only; N = first N lines; -1 = full chunk)' },
+      filter: { type: 'string', description: 'khoj-style filter: +"word" -"word" file:"glob"' },
+      rebuild: { type: 'boolean', description: 'force full index rebuild (default false)' }},
     output: textOut,
     timeoutMs: 300000,
     async execute(args: any) {
@@ -44,8 +43,7 @@ export async function apply(ctx: any) {
         query,
         topK: Number(args?.topK) || 10,
         filter: args?.filter ? String(args.filter) : undefined,
-        rebuild: args?.rebuild === true,
-      });
+        rebuild: args?.rebuild === true});
       if (!hits.length) return 'No results for: ' + query;
       const maxLines = Number(args?.maxSnippetLines ?? 0);
       const lines: string[] = ['Code search: ' + query + ' (' + hits.length + ' hits)', ''];
@@ -61,8 +59,7 @@ export async function apply(ctx: any) {
         lines.push('');
       }
       return lines.join('\n');
-    },
-  }));
+    }}));
 
   // --- search_fetch ---
   ctx.tools.register(defineTool({
@@ -77,13 +74,11 @@ export async function apply(ctx: any) {
       const res = await fetch(url, {
         headers: { 'User-Agent': 'Mozilla/5.0 (dsh-search)' },
         redirect: 'follow',
-        signal: AbortSignal.timeout(25000),
-      });
+        signal: AbortSignal.timeout(25000)});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = extractText(await res.text());
       return 'URL: ' + url + '\nchars: ' + text.length + '\n\n' + text;
-    },
-  }));
+    }}));
 
   // --- search_github ---
   ctx.tools.register(defineTool({
@@ -91,11 +86,10 @@ export async function apply(ctx: any) {
     description: 'Search GitHub directly via its REST API (no Google). Types: repo (default), code, issue, commit. Code search requires a token (GITHUB_TOKEN/GH_PAT env or ~/.dsh/.credentials.yaml refs). Use qualifiers like "lang:ts stars:>100" or "repo:owner/name".',
     parameters: {
       q: { type: 'string', required: true, description: 'search query, may include GitHub qualifiers' },
-      type: { type: 'string', required: false, description: 'repo | code | issue | commit (default repo)' },
-      perPage: { type: 'number', required: false, description: '1-50 (default 10)' },
-      sort: { type: 'string', required: false, description: 'repo: stars/forks/updated; issue: comments/reactions/created/updated' },
-      order: { type: 'string', required: false, description: 'asc | desc' },
-    },
+      type: { type: 'string', description: 'repo | code | issue | commit (default repo)' },
+      perPage: { type: 'number', description: '1-50 (default 10)' },
+      sort: { type: 'string', description: 'repo: stars/forks/updated; issue: comments/reactions/created/updated' },
+      order: { type: 'string', description: 'asc | desc' }},
     output: textOut,
     timeoutMs: 30000,
     async execute(args: any) {
@@ -106,8 +100,7 @@ export async function apply(ctx: any) {
       const r = await githubSearch(kind, q, {
         perPage: Number(args?.perPage) || 10,
         sort: args?.sort ? String(args.sort) : undefined,
-        order: args?.order ? String(args.order) : undefined,
-      });
+        order: args?.order ? String(args.order) : undefined});
       if (r.error) return 'ERROR: ' + r.error;
       if (!r.hits.length) return 'No results (total ' + r.total + ')';
       const token = githubToken() ? 'authed' : 'UNAUTHED (rate limit 10/min)';
@@ -119,8 +112,7 @@ export async function apply(ctx: any) {
         lines.push('');
       }
       return lines.join('\n');
-    },
-  }));
+    }}));
 
 
   // --- search_arxiv: arXiv API (papers, no browser needed) ---
@@ -129,10 +121,9 @@ export async function apply(ctx: any) {
     description: 'Search arXiv papers via the official export API (Atom, no key). Supports arXiv query syntax: field prefixes all:/ti:/au:/abs:/cat:, boolean AND/OR/ANDNOT, quoted phrases (e.g. all:"mean-shift" AND all:"representation learning" OR ti:distillation). Pass multiple queries to cover several angles of one research question — each query is rate-limited politely (arXiv requires ~3s between calls). Returns id, title, authors, categories, published date, abstract, abs URL per hit.',
     parameters: {
       queries: { type: 'array', required: true, description: '1-8 arXiv search_query strings (see syntax above)' },
-      maxResultsPerQuery: { type: 'number', required: false, description: 'max hits per query (default 5, max 20)' },
-      sortBy: { type: 'string', required: false, description: 'relevance (default) | recent' },
-      summaryChars: { type: 'number', required: false, description: 'abstract chars per paper (default 280)' },
-    },
+      maxResultsPerQuery: { type: 'number', description: 'max hits per query (default 5, max 20)' },
+      sortBy: { type: 'string', description: 'relevance (default) | recent' },
+      summaryChars: { type: 'number', description: 'abstract chars per paper (default 280)' }},
     output: textOut,
     timeoutMs: 120000,
     async execute(args: any) {
@@ -150,8 +141,7 @@ export async function apply(ctx: any) {
         total += r.papers.length;
       }
       return total === 0 ? 'No results for any query.' : parts.join('\n\n----------\n\n');
-    },
-  }));
+    }}));
 
   // --- search_corpus_add ---
   ctx.tools.register(defineTool({
@@ -171,8 +161,7 @@ export async function apply(ctx: any) {
           const res = await fetch(url, {
             headers: { 'User-Agent': 'Mozilla/5.0 (dsh-search)' },
             redirect: 'follow',
-            signal: AbortSignal.timeout(25000),
-          });
+            signal: AbortSignal.timeout(25000)});
           if (!res.ok) { errors.push(url + ' HTTP ' + res.status); continue; }
           const chunks = chunkText(extractText(await res.text()));
           if (!chunks.length) { errors.push(url + ' empty'); continue; }
@@ -182,8 +171,7 @@ export async function apply(ctx: any) {
       }
       return 'indexed ' + indexed + ' chunks from ' + urls.length + ' url(s) (total ' + store.count() + ')' +
         (errors.length ? '\nerrors: ' + errors.join('; ') : '');
-    },
-  }));
+    }}));
 
   // --- search_corpus_search ---
   ctx.tools.register(defineTool({
@@ -191,8 +179,7 @@ export async function apply(ctx: any) {
     description: 'Semantic search over the ephemeral corpus (see search_corpus_add). Returns top-k chunks with cosine scores.',
     parameters: {
       q: { type: 'string', required: true, description: 'query text' },
-      k: { type: 'number', required: false, description: 'top-k (default 5, max 20)' },
-    },
+      k: { type: 'number', description: 'top-k (default 5, max 20)' }},
     output: textOut,
     timeoutMs: 60000,
     async execute(args: any) {
@@ -203,8 +190,7 @@ export async function apply(ctx: any) {
       const hits = getStore().search(vec, k);
       if (!hits.length) return 'corpus empty — add urls first via search_corpus_add';
       return hits.map((h, i) => '[' + (i + 1) + '] ' + h.score.toFixed(3) + ' ' + h.url + '\n  ' + h.chunk.slice(0, 240)).join('\n');
-    },
-  }));
+    }}));
 
   // --- search_corpus_clear ---
   ctx.tools.register(defineTool({
@@ -216,8 +202,7 @@ export async function apply(ctx: any) {
     execute() {
       getStore().clear();
       return 'corpus cleared';
-    },
-  }));
+    }}));
 
 
   // --- search_probe ---
@@ -226,11 +211,10 @@ export async function apply(ctx: any) {
     description: 'Deep-web probe: mine content search engines cannot reach — Hacker News (Algolia), Reddit (JSON API), forum search endpoints (phpBB/XenForo/Flarum/Discourse/vBulletin), and RSSHub feeds (public https://rsshub.app or DSH_SEARCH_RSSHUB_URL). Returns items per source with deduped links.',
     parameters: {
       q: { type: 'string', required: true, description: 'search query' },
-      targets: { type: 'string', required: false, description: 'all | hn | reddit | forum | comma-mix (default all)' },
-      forumBase: { type: 'string', required: false, description: 'forum base URL to mine (e.g. https://forum.example.com)' },
-      subreddit: { type: 'string', required: false, description: 'restrict Reddit to a subreddit' },
-      maxPerSource: { type: 'number', required: false, description: 'items per source (default 10)' },
-    },
+      targets: { type: 'string', description: 'all | hn | reddit | forum | comma-mix (default all)' },
+      forumBase: { type: 'string', description: 'forum base URL to mine (e.g. https://forum.example.com)' },
+      subreddit: { type: 'string', description: 'restrict Reddit to a subreddit' },
+      maxPerSource: { type: 'number', description: 'items per source (default 10)' }},
     output: textOut,
     timeoutMs: 60000,
     async execute(args: any) {
@@ -241,8 +225,7 @@ export async function apply(ctx: any) {
         targets: args?.targets ? String(args.targets) : undefined,
         forumBase: args?.forumBase ? String(args.forumBase) : undefined,
         subreddit: args?.subreddit ? String(args.subreddit) : undefined,
-        maxPerSource: Number(args?.maxPerSource) || 10,
-      });
+        maxPerSource: Number(args?.maxPerSource) || 10});
       const lines: string[] = ['Probe: ' + q, ''];
       let total = 0;
       for (const s of result.sources) {
@@ -257,8 +240,7 @@ export async function apply(ctx: any) {
       }
       lines.push('items: ' + total + ' | deduped links: ' + result.dedupedLinks.length);
       return lines.join('\n');
-    },
-  }));
+    }}));
 
   // --- search_deep ---
   ctx.tools.register(defineTool({
@@ -266,13 +248,12 @@ export async function apply(ctx: any) {
     description: 'Agentic deep-web investigation: plan -> parallel probe (HN/Reddit/forums/RSSHub) -> reflect -> synthesize with [n] citation anchors. Unlike plain search it digs into forums and communities search engines cannot index. Requires ctx.llm (host LLM). maxIterations 1-5, maxQueries 1-10, depth light (snippets) | deep (full-page fetch).',
     parameters: {
       question: { type: 'string', required: true, description: 'the research question' },
-      maxIterations: { type: 'number', required: false, description: '1-5 (default 3)' },
-      maxQueries: { type: 'number', required: false, description: '1-10 (default 4)' },
-      depth: { type: 'string', required: false, description: 'light | deep (default light)' },
-      targets: { type: 'string', required: false, description: 'all | hn | reddit | forum | mix' },
-      forumBase: { type: 'string', required: false, description: 'forum URL to mine' },
-      subreddit: { type: 'string', required: false, description: 'Reddit subreddit filter' },
-    },
+      maxIterations: { type: 'number', description: '1-5 (default 3)' },
+      maxQueries: { type: 'number', description: '1-10 (default 4)' },
+      depth: { type: 'string', description: 'light | deep (default light)' },
+      targets: { type: 'string', description: 'all | hn | reddit | forum | mix' },
+      forumBase: { type: 'string', description: 'forum URL to mine' },
+      subreddit: { type: 'string', description: 'Reddit subreddit filter' }},
     output: textOut,
     timeoutMs: 300000,
     async execute(args: any) {
@@ -287,19 +268,16 @@ export async function apply(ctx: any) {
         depth: args?.depth === 'deep' ? 'deep' : 'light',
         targets: args?.targets ? String(args.targets) : undefined,
         forumBase: args?.forumBase ? String(args.forumBase) : undefined,
-        subreddit: args?.subreddit ? String(args.subreddit) : undefined,
-      });
+        subreddit: args?.subreddit ? String(args.subreddit) : undefined});
       return 'iterations: ' + res.iterations + ' | queries: ' + res.queries.length + ' | sources: ' + res.sources.length + '\n\n' + res.answer;
-    },
-  }));
+    }}));
 
   // --- v0.4 web search provider (Bing/DDG/SearXNG free; Exa/Tavily keyed) ---
   // Config: env EXA_API_KEY / TAVILY_API_KEY; optional env DSH_SEARCH_PROVIDER (default engine)
   const searchCfg = (): SearchConfig => ({
     provider: process.env.DSH_SEARCH_PROVIDER || 'bing',
     cache: true,
-    cacheTtl: 5,
-  });
+    cacheTtl: 5});
   registerWebProvider(ctx, searchCfg);
   registerPlatformSearchTool(ctx, searchCfg);
 

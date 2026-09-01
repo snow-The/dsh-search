@@ -113,8 +113,7 @@ async function fetchText(url: string, signal?: AbortSignal, headers: Record<stri
     const res = await fetch(url, {
       headers: { 'user-agent': USER_AGENT, 'accept-language': ACCEPT_LANG, ...headers },
       redirect: 'follow',
-      signal: controller.signal,
-    });
+      signal: controller.signal});
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return await res.text();
   } finally {
@@ -185,8 +184,7 @@ async function searchBing(query: string, maxResults: number, cfg: SearchConfig, 
     sources.push({
       url: hrefMatch[1],
       ...(titleMatch ? { title: stripTags(titleMatch[1]) } : {}),
-      ...(snippetMatch ? { snippet: stripTags(snippetMatch[1]) } : {}),
-    });
+      ...(snippetMatch ? { snippet: stripTags(snippetMatch[1]) } : {})});
   }
   return uniqueSources(sources, maxResults);
 }
@@ -214,8 +212,7 @@ async function searchDdgHtml(query: string, maxResults: number, cfg: SearchConfi
       url,
       ...(titleMatch ? { title: stripTags(titleMatch[1]) } : {}),
       ...(snippetMatch ? { snippet: stripTags(snippetMatch[1]) } : {}),
-      ...(dateMatch ? { publishedAt: dateMatch[1] } : {}),
-    });
+      ...(dateMatch ? { publishedAt: dateMatch[1] } : {})});
   }
   return uniqueSources(sources, maxResults);
 }
@@ -243,8 +240,7 @@ async function searchDdgLite(query: string, maxResults: number, cfg: SearchConfi
     sources.push({
       url,
       ...(titleMatch ? { title: stripTags(titleMatch[1]) } : {}),
-      ...(snippet ? { snippet: stripTags(snippet) } : {}),
-    });
+      ...(snippet ? { snippet: stripTags(snippet) } : {})});
   }
   return uniqueSources(sources, maxResults);
 }
@@ -267,8 +263,7 @@ async function searchSearxng(query: string, maxResults: number, cfg: SearchConfi
       try {
         response = await fetch(base + '/search?' + params, {
           headers: { 'user-agent': USER_AGENT, accept: 'application/json' },
-          signal: controller.signal,
-        });
+          signal: controller.signal});
       } finally {
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
@@ -287,8 +282,7 @@ async function searchSearxng(query: string, maxResults: number, cfg: SearchConfi
         .map((r) => ({
           url: r.url!,
           ...(r.title ? { title: String(r.title) } : {}),
-          ...(r.content ? { snippet: String(r.content) } : {}),
-        }));
+          ...(r.content ? { snippet: String(r.content) } : {})}));
       if (sources.length > 0) return uniqueSources(sources, maxResults);
       errors.push(base + ': 0 results');
     } catch (e) {
@@ -303,16 +297,14 @@ async function searchTavily(query: string, maxResults: number, apiKey: string, s
     method: 'POST',
     headers: { 'content-type': 'application/json', 'user-agent': USER_AGENT },
     body: JSON.stringify({ api_key: apiKey, query, max_results: Math.min(maxResults, 10), search_depth: 'basic' }),
-    signal,
-  });
+    signal});
   if (!res.ok) throw new Error('tavily: HTTP ' + res.status);
   const data = (await res.json()) as { results?: { title?: string; url?: string; content?: string }[] };
   return uniqueSources(
     (data.results ?? []).map((r) => ({
       url: r.url ?? '',
       ...(r.title ? { title: r.title } : {}),
-      ...(r.content ? { snippet: r.content } : {}),
-    })).filter((s) => s.url),
+      ...(r.content ? { snippet: r.content } : {})})).filter((s) => s.url),
     maxResults,
   );
 }
@@ -322,16 +314,14 @@ async function searchExa(query: string, maxResults: number, apiKey: string, sign
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'user-agent': USER_AGENT },
     body: JSON.stringify({ query, numResults: Math.min(maxResults, 10) }),
-    signal,
-  });
+    signal});
   if (!res.ok) throw new Error('exa: HTTP ' + res.status);
   const data = (await res.json()) as { results?: { title?: string; url?: string; text?: string }[] };
   return uniqueSources(
     (data.results ?? []).map((r) => ({
       url: r.url ?? '',
       ...(r.title ? { title: r.title } : {}),
-      ...(r.text ? { snippet: r.text.slice(0, 300) } : {}),
-    })).filter((s) => s.url),
+      ...(r.text ? { snippet: r.text.slice(0, 300) } : {})})).filter((s) => s.url),
     maxResults,
   );
 }
@@ -374,14 +364,12 @@ type EngineFn = (query: string, maxResults: number, cfg: SearchConfig, signal?: 
 
 const KEYED_ENGINES: Record<string, { fn: EngineFn; keyEnv: string }> = {
   exa: { fn: (q, m, _c, s) => searchExa(q, m, process.env.EXA_API_KEY ?? '', s), keyEnv: 'EXA_API_KEY' },
-  tavily: { fn: (q, m, _c, s) => searchTavily(q, m, process.env.TAVILY_API_KEY ?? '', s), keyEnv: 'TAVILY_API_KEY' },
-};
+  tavily: { fn: (q, m, _c, s) => searchTavily(q, m, process.env.TAVILY_API_KEY ?? '', s), keyEnv: 'TAVILY_API_KEY' }};
 const FREE_ENGINES: Record<string, EngineFn> = {
   bing: searchBing,
   ddg: searchDdgHtml,
   'ddg-lite': searchDdgLite,
-  searxng: searchSearxng,
-};
+  searxng: searchSearxng};
 
 function keyedEngineAvailable(id: string): boolean {
   return Boolean(process.env[KEYED_ENGINES[id].keyEnv]);
@@ -435,8 +423,7 @@ export async function runSearchChain(req: SearchRequest, cfg: SearchConfig, sign
       const out: WebSearchOut = {
         sources,
         engine: id,
-        note: id === preferred || !preferred ? undefined : 'preferred "' + preferred + '" failed, fell back to "' + id + '"' + (errors.length ? ' (' + errors.join('; ') + ')' : ''),
-      };
+        note: id === preferred || !preferred ? undefined : 'preferred "' + preferred + '" failed, fell back to "' + id + '"' + (errors.length ? ' (' + errors.join('; ') + ')' : '')};
       if (key) {
         // fallback hits get 1/5 TTL so the preferred engine recovers quickly
         cacheSet(key, out, id === preferred || !preferred ? cacheTtlMs : Math.max(Math.round(cacheTtlMs / 5), 1000));
@@ -465,8 +452,7 @@ export function createWebSearchProvider(cfg: () => SearchConfig): {
     async search(request, signal) {
       const out = await runSearchChain(request, cfg(), signal);
       return { content: out.content, sources: out.sources, truncated: false };
-    },
-  };
+    }};
 }
 
 /** platform_search tool: explicit engine control + time filtering + engine notes. */
@@ -476,10 +462,9 @@ export function registerPlatformSearchTool(ctx: any, cfg: () => SearchConfig): v
     description: 'Web search with explicit engine control (dsh-search v0.4). Engines: bing, ddg, ddg-lite, searxng (free, no key); exa, tavily (require EXA_API_KEY / TAVILY_API_KEY). Unknown or failed engines fall back automatically with a note. timeRange filters results (day/week/month/year). Returns citeable sources.',
     parameters: {
       query: { type: 'string', required: true, description: 'search query' },
-      engine: { type: 'string', required: false, description: 'engine override: bing | ddg | ddg-lite | searxng | exa | tavily (default: auto)' },
-      maxResults: { type: 'number', required: false, description: 'max results (default 5, max 20)' },
-      timeRange: { type: 'string', required: false, description: 'time filter: "day" | "week" | "month" | "year" or "3d"/"2w"/"1m"' },
-    },
+      engine: { type: 'string', description: 'engine override: bing | ddg | ddg-lite | searxng | exa | tavily (default: auto)' },
+      maxResults: { type: 'number', description: 'max results (default 5, max 20)' },
+      timeRange: { type: 'string', description: 'time filter: "day" | "week" | "month" | "year" or "3d"/"2w"/"1m"' }},
     output: { schema: { type: 'json' } },
     timeoutMs: 60000,
     async execute(args: any) {
@@ -487,34 +472,31 @@ export function registerPlatformSearchTool(ctx: any, cfg: () => SearchConfig): v
         query: String(args?.query ?? ''),
         maxResults: Number(args?.maxResults) || 5,
         engine: args?.engine ? String(args.engine) : undefined,
-        timeRange: args?.timeRange ? String(args.timeRange) : undefined,
-      }, cfg());
+        timeRange: args?.timeRange ? String(args.timeRange) : undefined}, cfg());
       return {
         engine: out.engine,
         ...(out.note ? { note: out.note } : {}),
-        sources: out.sources,
-      };
-    },
-  }));
+        sources: out.sources};
+    }}));
 }
 
 /** Register the ctx.web search provider; takes over when none configured. */
 export function registerWebProvider(ctx: any, cfg: () => SearchConfig): void {
-  const doRegister = () => {
-    if (!ctx.web || typeof ctx.web.registerSearchProvider !== 'function') return;
-    const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
-    try {
-      if (!ctx.web.searchProviderId) {
-        ctx.web.searchProviderId = 'dsh-search';
-      }
-    } catch { /* runtime override not supported on this version */ }
-    if (typeof ctx.onDispose === 'function') {
-      ctx.onDispose(() => { try { disposer(); } catch { /* noop */ } });
+  // 姿势对齐 dsh-free-search / dsh-web-search-deepseek：apply 时直接注册，
+  // 时机由模块级 export inject = ["web"] 交给 loader（等 web 服务就绪后才 apply）。
+  // 不要用 ctx.inject(['web'], ...)——"web" 不是 cordis service（settings/webServer 才是），
+  // 回调永远不会触发，导致 provider 未注册（"configured web provider ... is not registered"）。
+  if (!ctx.web || typeof ctx.web.registerSearchProvider !== 'function') {
+    console.warn('[dsh-search] ctx.web.registerSearchProvider unavailable, provider NOT registered');
+    return;
+  }
+  const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
+  try {
+    if (!ctx.web.searchProviderId) {
+      ctx.web.searchProviderId = 'dsh-search';
     }
-  };
-  if (typeof ctx.inject === 'function') {
-    ctx.inject(['web'], doRegister);
-  } else {
-    doRegister();
+  } catch { /* runtime override not supported on this version */ }
+  if (typeof ctx.onDispose === 'function') {
+    ctx.onDispose(() => { try { disposer(); } catch { /* noop */ } });
   }
 }
