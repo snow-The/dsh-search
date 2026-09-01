@@ -500,14 +500,21 @@ export function registerPlatformSearchTool(ctx: any, cfg: () => SearchConfig): v
 
 /** Register the ctx.web search provider; takes over when none configured. */
 export function registerWebProvider(ctx: any, cfg: () => SearchConfig): void {
-  if (!ctx.web || typeof ctx.web.registerSearchProvider !== 'function') return;
-  const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
-  try {
-    if (!ctx.web.searchProviderId) {
-      ctx.web.searchProviderId = 'dsh-search';
+  const doRegister = () => {
+    if (!ctx.web || typeof ctx.web.registerSearchProvider !== 'function') return;
+    const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
+    try {
+      if (!ctx.web.searchProviderId) {
+        ctx.web.searchProviderId = 'dsh-search';
+      }
+    } catch { /* runtime override not supported on this version */ }
+    if (typeof ctx.onDispose === 'function') {
+      ctx.onDispose(() => { try { disposer(); } catch { /* noop */ } });
     }
-  } catch { /* runtime override not supported on this version */ }
-  if (typeof ctx.onDispose === 'function') {
-    ctx.onDispose(() => { try { disposer(); } catch { /* noop */ } });
+  };
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['web'], doRegister);
+  } else {
+    doRegister();
   }
 }
