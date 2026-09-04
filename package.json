@@ -14,7 +14,7 @@
     "deepseek-harness"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:@deepseek-ai/* --log-level=warning",
+    "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --packages=external --external:@deepseek-ai/* --log-level=warning",
     "prepare": "pnpm build",
     "test": "node --test"
   },
@@ -35,7 +35,9 @@
   },
   "types": "./dist/index.d.ts",
   "dependencies": {
-    "hono": "^4.13.3"
+    "@scalar/openapi-parser": "^0.29.0",
+    "hono": "^4.13.3",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

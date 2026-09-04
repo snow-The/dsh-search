@@ -9,6 +9,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { extractText, chunkText, embedTexts, getStore, resetStore } from './query.js';
 import { githubSearch, githubToken, type GitHubKind } from './github.js';
+import { callOpenApi } from './openapi.js';
 import { arxivSearchBatch, formatPapers } from './arxiv.js';
 import { maybeStartServer } from './server.js';
 import { registerWebProvider, registerPlatformSearchTool, type SearchConfig } from './websearch.js';
@@ -122,6 +123,35 @@ export async function apply(ctx: any) {
       return lines.join('\n');
     }}));
 
+
+  // --- search_api: OpenAPI 3.x generic API caller (any spec: JSON/YAML URL, file, or inline) ---
+  ctx.tools.register(defineTool({
+    name: 'search_api',
+    description: 'Call any REST API described by an OpenAPI 3.x spec (OAS 3.0/3.1). Pass spec= as an http(s) URL, a local file path, or an inline JSON/YAML string; operation= as an operationId or "METHOD /path" (e.g. "get /search/repositories"). params= maps parameter names to values (path/query/header + body via params.body). auth= accepts a bearer/apiKey token, "env:VAR" for an env var, or "github"/"gh" to use the gh CLI keyring token. server= overrides the spec server URL. Uses @scalar/openapi-parser + yaml under the hood. Example: spec="https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json" operation="get /search/repositories" params={"q":"mem0","sort":"stars"} auth="gh".',
+    parameters: {
+      spec: { type: 'string', required: true, description: 'OpenAPI spec: http(s) URL | local file path | inline JSON/YAML string' },
+      operation: { type: 'string', required: true, description: 'operationId, or "METHOD /path" (e.g. "get /search/repositories")' },
+      params: { type: 'object', additionalProperties: true, description: 'parameter name -> value (path/query/header); request body via params.body' },
+      server: { type: 'string', description: 'override the spec server base URL' },
+      auth: { type: 'string', description: 'bearer/apiKey token | "env:VAR" | "github"/"gh" (gh CLI keyring)' },
+      timeoutMs: { type: 'number', description: 'request timeout (default 60000)' }},
+    output: textOut,
+    timeoutMs: 120000,
+    async execute(args: any) {
+      const spec = args?.spec;
+      const operation = String(args?.operation ?? '').trim();
+      if (!spec) throw new Error('spec required (URL, file path, or inline JSON/YAML)');
+      if (!operation) throw new Error('operation required (operationId or "METHOD /path")');
+      const params = args?.params && typeof args.params === 'object' ? args.params as Record<string, unknown> : undefined;
+      return await callOpenApi({
+        spec,
+        operation,
+        params,
+        server: args?.server ? String(args.server) : undefined,
+        auth: args?.auth ? String(args.auth) : undefined,
+        timeoutMs: args?.timeoutMs ? Number(args.timeoutMs) : undefined,
+      });
+    }}));
 
   // --- search_arxiv: arXiv API (papers, no browser needed) ---
   ctx.tools.register(defineTool({

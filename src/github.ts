@@ -22,7 +22,7 @@ export interface GitHubHit {
   extra?: Record<string, unknown>;
 }
 
-/** Token lookup: env first, then credentials file refs (line-based, supports indentation). */
+/** Token lookup: env first, then credentials file refs, then gh CLI keyring (gh auth token). */
 export function githubToken(): string {
   const env = process.env.GITHUB_TOKEN || process.env.GH_PAT;
   if (env) return env;
@@ -37,6 +37,12 @@ export function githubToken(): string {
       if (m && (m[1] === 'GITHUB_TOKEN' || m[1] === 'GH_PAT')) return m[2].replace(/^['"]|['"]$/g, '');
     }
   } catch { /* noop */ }
+  // gh CLI keyring fallback (best-effort; gh may not be installed)
+  try {
+    const { execSync } = require('node:child_process') as typeof import('node:child_process');
+    const t = execSync('gh auth token', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (t) return t;
+  } catch { /* no gh */ }
   return '';
 }
 
