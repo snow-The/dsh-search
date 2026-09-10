@@ -1,7 +1,11 @@
 
-import { extractText, chunkText, hashEmbed, cosine, CorpusStore } from '../src/query.ts';
-import { githubSearch, githubToken } from '../src/github.ts';
-import { createApp } from '../src/server.ts';
+// Imported from the pre-bundled test build (npm run pretest) rather than from src/:
+// the plugin's source uses .js specifiers for .ts modules (correct for its esbuild
+// build, unresolvable for plain node), so the suite runs against the same sources
+// after bundling - which is what the plugin actually ships.
+import { extractText, chunkText, hashEmbed, cosine, CorpusStore } from '../.test-build/query.js';
+import { githubSearch, githubToken } from '../.test-build/github.js';
+import { createApp } from '../.test-build/server.js';
 
 const html = '<html><head><style>body{}</style></head><body><nav>menu</nav><h1>Hello &amp; World</h1><p>Sentence one. Sentence two!</p><script>var x=1;</script></body></html>';
 console.log('EXTRACT:', JSON.stringify(extractText(html)));
