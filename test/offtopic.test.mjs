@@ -21,7 +21,12 @@ test('the real target passes', () => {
   assert.equal(looksOffTopic(q, good), false);
 });
 
-test('a query with no distinctive token cannot be judged (never a false alarm)', () => {
-  assert.equal(looksOffTopic('how to do the thing', [{ url: 'https://x.test/a', title: 'unrelated' }]), false);
+test('a query made only of stopwords cannot be judged (never a false alarm)', () => {
+  // 'thing' would survive the filter, so use a genuinely contentless query here.
+  assert.equal(looksOffTopic('how to do the', [{ url: 'https://x.test/a', title: 'unrelated' }]), false);
   assert.equal(looksOffTopic('', [{ url: 'https://x.test/a' }]), false);
+});
+
+test('a query with any surviving token IS judged (no silent pass)', () => {
+  assert.equal(looksOffTopic('how to do the thing', [{ url: 'https://x.test/a', title: 'unrelated' }]), true);
 });
