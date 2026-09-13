@@ -365,11 +365,30 @@ type EngineFn = (query: string, maxResults: number, cfg: SearchConfig, signal?: 
 const KEYED_ENGINES: Record<string, { fn: EngineFn; keyEnv: string }> = {
   exa: { fn: (q, m, _c, s) => searchExa(q, m, process.env.EXA_API_KEY ?? '', s), keyEnv: 'EXA_API_KEY' },
   tavily: { fn: (q, m, _c, s) => searchTavily(q, m, process.env.TAVILY_API_KEY ?? '', s), keyEnv: 'TAVILY_API_KEY' }};
+/** Free-engine order = preference order. ddg first: measured on a rare-term query,
+ *  ddg returned the exact target while bing returned a page about the general topic and
+ *  ignored the distinctive token. A wrong-but-plausible answer is worse than a failure. */
 const FREE_ENGINES: Record<string, EngineFn> = {
-  bing: searchBing,
   ddg: searchDdgHtml,
   'ddg-lite': searchDdgLite,
-  searxng: searchSearxng};
+  searxng: searchSearxng,
+  bing: searchBing,
+};
+
+const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'how', 'what', 'why', 'best', 'vs', 'not', 'from', 'into', 'that', 'this', 'are', 'was', 'you', 'your', 'can', 'a', 'an', 'of', 'in', 'to', 'on']);
+
+/**
+ * A result set that shares NO token with the query is answering a different question.
+ * This is the "results from another context" failure: the engine's parser returns the
+ * right-looking topic and silently ignores the distinctive token, so the caller gets
+ * plausible junk instead of an error. Fail loudly instead; the chain moves on.
+ */
+export function looksOffTopic(query: string, hits: SearchHit[]): boolean {
+  const tokens = (String(query).toLowerCase().match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
+  if (tokens.length === 0) return false;
+  const hay = hits.map((h) => ((h.title ?? '') + ' ' + (h.snippet ?? '') + ' ' + (h.url ?? ''))).join(' ').toLowerCase();
+  return !tokens.some((t) => hay.includes(t));
+}
 
 function keyedEngineAvailable(id: string): boolean {
   return Boolean(process.env[KEYED_ENGINES[id].keyEnv]);
@@ -410,6 +429,8 @@ export async function runSearchChain(req: SearchRequest, cfg: SearchConfig, sign
 
   const chain = engineChain(preferred);
   const errors: string[] = [];
+  // Best of the rejected sets: returning nothing is worse than returning something labelled.
+  let offTopicBest: { id: string; sources: SearchHit[] } | null = null;
   for (const id of chain) {
     try {
       let sources: SearchHit[];
@@ -420,6 +441,11 @@ export async function runSearchChain(req: SearchRequest, cfg: SearchConfig, sign
         sources = await FREE_ENGINES[id](query, maxResults, cfg, signal, tr ?? undefined);
       }
       if (sources.length === 0) { errors.push(id + ': 0 results'); continue; }
+      if (looksOffTopic(query, sources)) {
+        errors.push(id + ': ' + sources.length + ' results share no query token (off-topic)');
+        if (offTopicBest == null) offTopicBest = { id, sources };
+        continue;
+      }
       const out: WebSearchOut = {
         sources,
         engine: id,
@@ -432,6 +458,15 @@ export async function runSearchChain(req: SearchRequest, cfg: SearchConfig, sign
     } catch (e) {
       errors.push(id + ': ' + (e instanceof Error ? e.message : String(e)));
     }
+  }
+  if (offTopicBest != null) {
+    const best: WebSearchOut = {
+      sources: offTopicBest.sources,
+      engine: offTopicBest.id,
+      note: 'WARNING: no engine returned on-topic results (none shared a query token); best-effort from "' + offTopicBest.id + '". Tried: ' + errors.join(' | '),
+    };
+    if (key) cacheSet(key, best, Math.max(Math.round(cacheTtlMs / 5), 1000));
+    return best;
   }
   throw new Error('all search engines failed: ' + errors.join(' | '));
 }
