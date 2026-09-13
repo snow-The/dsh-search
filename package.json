@@ -16,8 +16,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=node --format=esm --outfile=dist/index.js --packages=external --external:@deepseek-ai/* --log-level=warning",
     "prepare": "pnpm build",
-    "test": "node --import ./test/register-stubs.mjs --test test/smoke.mjs test/offtopic.test.mjs",
-    "pretest": "esbuild src/query.ts src/github.ts src/server.ts src/websearch.ts --bundle --platform=node --format=esm --outdir=.test-build --packages=external --external:@deepseek-ai/* --log-level=warning",
+    "test": "node --import ./test/register-stubs.mjs --test test/smoke.mjs test/offtopic.test.mjs test/arxiv.test.mjs test/openalex.test.mjs test/github-quota.test.mjs test/core.test.mjs test/hubs.test.mjs test/opensources.test.mjs",
+    "pretest": "esbuild src/query.ts src/github.ts src/server.ts src/websearch.ts src/arxiv.ts src/openalex.ts src/core.ts src/hubs.ts src/opensources.ts --bundle --platform=node --format=esm --outdir=.test-build --packages=external --external:@deepseek-ai/* --log-level=warning",
     "test:offtopic": "node --import ./test/register-stubs.mjs --test test/offtopic.test.mjs"
   },
   "files": [

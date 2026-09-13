@@ -383,11 +383,28 @@ const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'how', 'what', 'why', 'b
  * right-looking topic and silently ignores the distinctive token, so the caller gets
  * plausible junk instead of an error. Fail loudly instead; the chain moves on.
  */
+/** A site root is a directory listing, not an answer. https://arxiv.org/ answers nothing. */
+export function isNavigational(url: string): boolean {
+  try { const u = new URL(String(url)); return u.pathname === '/' || u.pathname === ''; } catch { return false; }
+}
+
 export function looksOffTopic(query: string, hits: SearchHit[]): boolean {
   const tokens = (String(query).toLowerCase().match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
   if (tokens.length === 0) return false;
-  const hay = hits.map((h) => ((h.title ?? '') + ' ' + (h.snippet ?? '') + ' ' + (h.url ?? ''))).join(' ').toLowerCase();
-  return !tokens.some((t) => hay.includes(t));
+  const hay = (h: SearchHit) => ((h.title ?? '') + ' ' + (h.snippet ?? '') + ' ' + (h.url ?? '')).toLowerCase();
+  const all = hits.map(hay).join(' ');
+  const matched = tokens.filter((t) => all.includes(t));
+  if (matched.length === 0) return true;
+  // Matching ONLY the ubiquitous word is not evidence of relevance. A query about "when to compact
+  // agent context" came back as pages titled "什么是 arXiv" and "arXiv - 维基百科": every one of them
+  // matched the single token "arxiv" and nothing else, so the old rule passed them as on-topic.
+  if (tokens.length >= 3 && matched.length === 1 && hits.length > 1) {
+    const word = matched[0];
+    if (hits.every((h) => hay(h).includes(word))) return true;
+  }
+  // A set that is entirely site roots is a set of directories.
+  if (hits.length > 0 && hits.every((h) => isNavigational(String(h.url ?? '')))) return true;
+  return false;
 }
 
 function keyedEngineAvailable(id: string): boolean {

@@ -30,3 +30,22 @@ test('a query made only of stopwords cannot be judged (never a false alarm)', ()
 test('a query with any surviving token IS judged (no silent pass)', () => {
   assert.equal(looksOffTopic('how to do the thing', [{ url: 'https://x.test/a', title: 'unrelated' }]), true);
 });
+
+// Measured junk, verbatim: a query about WHEN to compact agent context came back as portal pages
+// ("arXiv.org e-Print archive", "arXiv 是期刊吗？", "ArXiv - 维基百科"). Every one of them matched the
+// single ubiquitous token "arxiv" and nothing else, so the old rule called the set on-topic.
+test('matching only the ubiquitous token is not relevance', () => {
+  const q = 'arxiv paper when to summarize agent context compaction threshold policy';
+  const junk = [
+    { url: 'https://arxiv.org/', title: 'arXiv.org e-Print archive', snippet: 'arXiv is a free distribution service and an open-access archive' },
+    { url: 'https://zhuanlan.zhihu.com/p/2019340359319209416', title: 'arXiv 是期刊吗？', snippet: '研究人员可以把论文草稿上传到 arXiv' },
+    { url: 'https://zh.wikipedia.org/wiki/ArXiv', title: 'ArXiv - 维基百科', snippet: 'arXiv.org 已收集超过 260 万篇预印本' },
+  ];
+  assert.equal(looksOffTopic(q, junk), true);
+});
+
+test('a set made only of site roots is a set of directories', () => {
+  const q = 'memgpt virtual context management';
+  const roots = [{ url: 'https://arxiv.org/', title: 'memgpt' }, { url: 'https://example.com/', title: 'memgpt management' }];
+  assert.equal(looksOffTopic(q, roots), true);
+});

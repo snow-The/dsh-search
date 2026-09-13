@@ -82,11 +82,23 @@ function mapHit(kind: GitHubKind, item: any): GitHubHit {
 }
 
 /** Query one GitHub search endpoint. Returns {hits, total, rateLimited, authRequired}. */
+/** Human-readable quota state from GitHub's own headers (remaining / reset / retry-after). */
+export function rateLimitNote(res: Response): string {
+  const remaining = res.headers.get('x-ratelimit-remaining');
+  const reset = Number(res.headers.get('x-ratelimit-reset'));
+  const retryAfter = Number(res.headers.get('retry-after'));
+  const bits: string[] = [];
+  if (remaining != null) bits.push('remaining ' + remaining);
+  if (Number.isFinite(reset) && reset > 0) bits.push('resets in ' + Math.max(0, Math.round((reset * 1000 - Date.now()) / 1000)) + 's');
+  if (Number.isFinite(retryAfter) && retryAfter > 0) bits.push('retry-after ' + retryAfter + 's');
+  return bits.length ? ' [' + bits.join(', ') + ']' : '';
+}
+
 export async function githubSearch(
   kind: GitHubKind,
   q: string,
   opts: { perPage?: number; sort?: string; order?: string } = {},
-): Promise<{ hits: GitHubHit[]; total: number; error?: string }> {
+): Promise<{ hits: GitHubHit[]; total: number; error?: string; note?: string }> {
   const perPage = Math.min(Math.max(opts.perPage ?? 10, 1), 50);
   const token = githubToken();
   const params = new URLSearchParams({ q, per_page: String(perPage) });
@@ -102,10 +114,16 @@ export async function githubSearch(
     return { hits: [], total: 0, error: 'network: ' + String((e as Error).message) };
   }
   if (res.status === 401) return { hits: [], total: 0, error: 'GitHub 401 — ' + (kind === 'code' ? 'code search requires a token (GITHUB_TOKEN/GH_PAT)' : 'token invalid or missing') };
-  if (res.status === 403) return { hits: [], total: 0, error: 'GitHub 403 — rate limited (unauth: 10/min, auth: 30/min)' };
+  // "rate limited" is only actionable if it says HOW limited and WHEN it resets. GitHub sends both
+  // in headers, and retry-after on a secondary limit; throwing them away leaves the caller unable to
+  // tell "wait 20 seconds" from "you are out for an hour".
+  if (res.status === 403 || res.status === 429) {
+    return { hits: [], total: 0, error: 'GitHub ' + res.status + ' — rate limited' + rateLimitNote(res) + (token ? '' : ' (no token: search is 10/min; a GITHUB_TOKEN raises it to 30/min)') };
+  }
   if (res.status === 422) return { hits: [], total: 0, error: 'GitHub 422 — invalid query syntax' };
-  if (!res.ok) return { hits: [], total: 0, error: 'GitHub ' + res.status };
+  if (!res.ok) return { hits: [], total: 0, error: 'GitHub ' + res.status + rateLimitNote(res) };
+  const note = rateLimitNote(res);
   const j = await res.json().catch(() => null) as { total_count?: number; items?: unknown[] } | null;
   if (!j || !Array.isArray(j.items)) return { hits: [], total: 0, error: 'bad payload' };
-  return { hits: j.items.map((it) => mapHit(kind, it)), total: j.total_count ?? 0 };
+  return { hits: j.items.map((it) => mapHit(kind, it)), total: j.total_count ?? 0, ...(note ? { note: 'quota' + note } : {}) };
 }

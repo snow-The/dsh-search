@@ -10,7 +10,9 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { extractText, chunkText, embedTexts, getStore, resetStore } from './query.js';
 import { githubSearch, githubToken, type GitHubKind } from './github.js';
 import { callOpenApi } from './openapi.js';
-import { arxivSearchBatch, formatPapers } from './arxiv.js';
+import { arxivSearchBatch, formatBatch } from './arxiv.js';
+import { hubSearch, type HubKind } from './hubs.js';
+import { openSourceSearch, OPEN_SOURCES, type OpenSourceId } from './opensources.js';
 import { maybeStartServer } from './server.js';
 import { registerWebProvider, registerPlatformSearchTool, type SearchConfig } from './websearch.js';
 
@@ -124,6 +126,55 @@ export async function apply(ctx: any) {
     }}));
 
 
+  // --- search_open: the A-tier free sources (no credential, all probed from this machine) ---
+  ctx.tools.register(defineTool({
+    name: 'search_open',
+    description: 'Search credential-free research sources: crossref (DOI metadata for any registered work), europepmc (life sciences + preprints), pubmed (biomedical index), figshare (research outputs/datasets), clinicaltrials (registered studies), openfda (drug adverse-event reports), chembl (compounds/bioactivity). Every one answered HTTP 200 from this machine with no key. Sources that need a login are deliberately NOT here.',
+    parameters: {
+      source: { type: 'string', required: true, description: 'crossref | europepmc | pubmed | figshare | clinicaltrials | openfda | chembl' },
+      query: { type: 'string', required: true, description: 'search terms (for openfda: a drug name)' },
+      limit: { type: 'number', description: 'max results (default 5, max 25)' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }] },
+    timeoutMs: 45000,
+    async execute(args: any) {
+      const source = String(args?.source ?? '').trim() as OpenSourceId;
+      if (!Object.prototype.hasOwnProperty.call(OPEN_SOURCES, source)) throw new Error('source must be one of: ' + Object.keys(OPEN_SOURCES).join(' | '));
+      const q = String(args?.query ?? '').trim();
+      if (!q) throw new Error('query required');
+      const r = await openSourceSearch(source, q, Number(args?.limit) || 5);
+      const head = OPEN_SOURCES[source].label + '  |  query: ' + JSON.stringify(q) + (r.note ? '  [' + r.note + ']' : '');
+      if (r.error) return head + '\nERROR: ' + r.error;
+      if (!r.hits.length) return head + '\nNo results.';
+      const lines = [head, ''];
+      for (const h of r.hits) { lines.push('• ' + h.title); if (h.url) lines.push('  ' + h.url); if (h.detail) lines.push('  ' + h.detail); lines.push(''); }
+      return lines.join('\n');
+    }}));
+
+  // --- search_hubs: model / dataset hub search (no credential needed for any of these) ---
+  ctx.tools.register(defineTool({
+    name: 'search_hubs',
+    description: 'Search model and dataset hubs: hf-models, hf-datasets (HuggingFace) and kaggle-datasets. ALL THREE ANSWER WITHOUT ANY LOGIN (measured 200/~210-420ms) and report size + popularity so a wrong pick is visible before downloading. Kaggle competitions/notebooks and ModelScope search are the credentialed half and are deliberately not covered.',
+    parameters: {
+      query: { type: 'string', required: true, description: 'search terms, e.g. "bge embedding zh" or "protein embeddings"' },
+      kind: { type: 'string', description: 'hf-models (default) | hf-datasets | kaggle-datasets' },
+      limit: { type: 'number', description: 'max results (default 10, max 25)' },
+    },
+    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }] },
+    timeoutMs: 30000,
+    async execute(args: any) {
+      const kind = String(args?.kind ?? 'hf-models') as HubKind;
+      if (!['hf-models', 'hf-datasets', 'kaggle-datasets'].includes(kind)) throw new Error('kind must be hf-models|hf-datasets|kaggle-datasets');
+      const q = String(args?.query ?? '').trim();
+      if (!q) throw new Error('query required');
+      const r = await hubSearch(kind, q, Number(args?.limit) || 10);
+      if (r.error) return 'ERROR: ' + r.error;
+      if (!r.hits.length) return 'No results for ' + JSON.stringify(q) + ' on ' + kind;
+      const lines = [kind + ' search: ' + q + '  (' + r.hits.length + ' hits, ' + (r.note ?? '') + ')', ''];
+      for (const h of r.hits) { lines.push('• ' + h.title); lines.push('  ' + h.url); lines.push('  ' + h.detail); lines.push(''); }
+      return lines.join('\n');
+    }}));
+
   // --- search_api: OpenAPI 3.x generic API caller (any spec: JSON/YAML URL, file, or inline) ---
   ctx.tools.register(defineTool({
     name: 'search_api',
@@ -172,13 +223,7 @@ export async function apply(ctx: any) {
       const sortBy = (args?.sortBy === 'recent' ? 'submittedDate' : 'relevance') as 'relevance' | 'submittedDate';
       const summaryChars = Number(args?.summaryChars) || 280;
       const results = await arxivSearchBatch(queries, { maxResults, sortBy });
-      const parts: string[] = [];
-      let total = 0;
-      for (const r of results) {
-        parts.push(formatPapers(r, summaryChars));
-        total += r.papers.length;
-      }
-      return total === 0 ? 'No results for any query.' : parts.join('\n\n----------\n\n');
+      return formatBatch(results, summaryChars);
     }}));
 
   // --- search_corpus_add ---
