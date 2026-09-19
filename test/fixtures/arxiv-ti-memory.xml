@@ -1,0 +1,33 @@
+<!-- Captured VERBATIM from the live arXiv export API on 2026-09-19:
+     GET https://export.arxiv.org/api/query?search_query=ti:%22Memory+Tagging%22&start=0&max_results=1
+     The point of this fixture is that arXiv writes <id> <title> <summary> <published> WITHOUT a
+     namespace prefix; a parser that only accepts <ns:tag> silently returns zero papers, which the
+     formatter then reports as "No results for any query." -->
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/1Y6X32IHpQqVzVAxqI4XUqZ65AU</id>
+  <title>arXiv Query: search_query=ti:"Memory Tagging"&amp;id_list=&amp;start=0&amp;max_results=1</title>
+  <updated>2026-09-19T12:21:43Z</updated>
+  <link href="https://arxiv.org/api/query?search_query=ti:%22Memory+Tagging%22&amp;start=0&amp;max_results=1&amp;id_list=" type="application/atom+xml"/>
+  <opensearch:itemsPerPage>1</opensearch:itemsPerPage>
+  <opensearch:totalResults>5</opensearch:totalResults>
+  <opensearch:startIndex>0</opensearch:startIndex>
+<entry>
+    <id>http://arxiv.org/abs/2209.00307v2</id>
+    <title>Memory Tagging: A Memory Efficient Design</title>
+    <updated>2022-11-03T08:14:46Z</updated>
+    <link href="https://arxiv.org/abs/2209.00307v2" rel="alternate" type="text/html"/>
+    <link href="https://arxiv.org/pdf/2209.00307v2" rel="related" type="application/pdf" title="pdf"/>
+    <summary>ARM recently introduced a security feature called Memory Tagging Extension or MTE, which is designed to defend against common memory safety vulnerabilities, such as buffer overflow and use after free. In this paper, we examine three aspects of MTE. First, we survey how modern software systems, such as Glibc, Android, Chrome, Linux, and LLVM, use MTE. We identify some common weaknesses and propose improvements. Second, we develop and experiment with an architectural improvement to MTE that improves its memory efficiency. Our design enables longer memory tags, which improves the accuracy of MTE. Finally, we discuss a number of enhancements to MTE to improve its security against certain memory safety attacks.</summary>
+    <category term="cs.CR" scheme="http://arxiv.org/schemas/atom"/>
+    <published>2022-09-01T09:15:10Z</published>
+    <arxiv:comment>16 Pages, 7 Figures. This version of the paper extends a shorter version submitted to IEEE Euro S&amp;P'23</arxiv:comment>
+    <arxiv:primary_category term="cs.CR"/>
+    <author>
+      <name>Aditi Partap</name>
+    </author>
+    <author>
+      <name>Dan Boneh</name>
+    </author>
+  </entry>
+</feed>
