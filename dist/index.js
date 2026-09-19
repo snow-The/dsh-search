@@ -1801,7 +1801,7 @@ function parseAtom(xml) {
   while ((m = entryRe.exec(xml)) !== null) {
     const e = m[1];
     const grab = (tag) => {
-      const mm = e.match(new RegExp("<[a-z]*:" + tag + ">([\\s\\S]*?)</[a-z]*:" + tag + ">"));
+      const mm = e.match(new RegExp("<(?:[a-z]+:)?" + tag + ">([\\s\\S]*?)</(?:[a-z]+:)?" + tag + ">"));
       return mm ? mm[1].trim() : "";
     };
     const idFull = grab("id");
@@ -1814,7 +1814,7 @@ function parseAtom(xml) {
       const nm = am[1].match(/<name>([\s\S]*?)<\/name>/);
       return nm ? nm[1].trim() : "";
     });
-    const categories = [...e.matchAll(/<category term="([^"]*)"\/>/g)].map((cm) => cm[1]);
+    const categories = [...e.matchAll(/<category term="([^"]*)"[^>]*\/>/g)].map((cm) => cm[1]);
     if (!id || !title) continue;
     out.push({ id, title, summary, published, updated, authors, categories, pdfUrl: "https://arxiv.org/pdf/" + id.replace(/v\d+$/, "") });
   }

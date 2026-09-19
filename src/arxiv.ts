@@ -95,8 +95,13 @@ export function parseAtom(xml: string): ArxivPaper[] {
   let m: RegExpExecArray | null;
   while ((m = entryRe.exec(xml)) !== null) {
     const e = m[1];
+    // The namespace prefix is OPTIONAL: arXiv writes <id> <title> <summary> <published> unprefixed
+    // and only auxiliary fields (arxiv:comment, arxiv:primary_category) carry a prefix. Requiring a
+    // prefix matched NOTHING, so every entry was dropped, zero papers came back with no error, and the
+    // tool reported 'No results for any query.' — a parser failure dressed as an empty world. The
+    // capture group must stay single (?:...) so the content index does not shift.
     const grab = (tag: string) => {
-      const mm = e.match(new RegExp('<[a-z]*:' + tag + '>([\\s\\S]*?)<\/[a-z]*:' + tag + '>'));
+      const mm = e.match(new RegExp('<(?:[a-z]+:)?' + tag + '>([\\s\\S]*?)<\/(?:[a-z]+:)?' + tag + '>'));
       return mm ? mm[1].trim() : '';
     };
     const idFull = grab('id');
@@ -109,7 +114,10 @@ export function parseAtom(xml: string): ArxivPaper[] {
       const nm = am[1].match(/<name>([\s\S]*?)<\/name>/);
       return nm ? nm[1].trim() : '';
     });
-    const categories = [...e.matchAll(/<category term="([^"]*)"\/>/g)].map((cm) => cm[1]);
+    // NOT 'term="..."/>': arXiv writes <category term="cs.CR" scheme="http://arxiv.org/schemas/atom"/>,
+    // so a self-close glued to the term attribute matched nothing and EVERY paper came back with an
+    // empty category list. The wire fixture caught this one field over from the prefix bug.
+    const categories = [...e.matchAll(/<category term="([^"]*)"[^>]*\/>/g)].map((cm) => cm[1]);
     if (!id || !title) continue;
     out.push({ id, title, summary, published, updated, authors, categories, pdfUrl: 'https://arxiv.org/pdf/' + id.replace(/v\d+$/, '') });
   }
