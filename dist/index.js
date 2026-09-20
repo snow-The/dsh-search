@@ -2016,7 +2016,8 @@ var OPEN_SOURCES = {
   figshare: { label: "Figshare \u2014 research outputs, datasets, figures", docs: "https://docs.figshare.com" },
   clinicaltrials: { label: "ClinicalTrials.gov v2 \u2014 registered studies", docs: "https://clinicaltrials.gov/data-api/api" },
   openfda: { label: "openFDA \u2014 drug adverse-event reports", docs: "https://open.fda.gov/apis/" },
-  chembl: { label: "ChEMBL \u2014 compounds and bioactivity", docs: "https://www.ebi.ac.uk/chembl/api/data/docs" }
+  chembl: { label: "ChEMBL \u2014 compounds and bioactivity", docs: "https://www.ebi.ac.uk/chembl/api/data/docs" },
+  openreview: { label: "OpenReview \u2014 ICLR/NeurIPS/ICML submissions, accepted AND rejected (public notes API)", docs: "https://docs.openreview.net" }
 };
 var enc = encodeURIComponent;
 var str = (v) => typeof v === "string" ? v : Array.isArray(v) ? String(v[0] ?? "") : v == null ? "" : String(v);
@@ -2066,6 +2067,37 @@ function mapChembl(m) {
     url: "https://www.ebi.ac.uk/chembl/compound_report_card/" + id + "/",
     detail: [props.full_mwt ? "MW " + props.full_mwt : "", props.alogp ? "logP " + props.alogp : "", str(m.max_phase) ? "max phase " + str(m.max_phase) : ""].filter(Boolean).join(" \xB7 ")
   };
+}
+function mapOpenReview(n) {
+  const c = n.content ?? {};
+  const unwrap = (v) => {
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (typeof v === "object" && "value" in v) return str(v.value);
+    return String(v);
+  };
+  const id = str(n.id) || str(n.forum);
+  const forum = str(n.forum) || id;
+  const ts = Number(n.pdate ?? n.cdate ?? 0);
+  const year = Number.isFinite(ts) && ts > 0 ? String(new Date(ts).getUTCFullYear()) : "";
+  const decision = unwrap(c.decision ?? c.recommendation);
+  return {
+    title: unwrap(c.title) || id,
+    url: forum ? "https://openreview.net/forum?id=" + forum : "",
+    detail: [unwrap(c.venue), year, decision].filter(Boolean).join(" \xB7 ")
+  };
+}
+function looksGated(contentType, body) {
+  if (/json/i.test(contentType)) return false;
+  const head = body.slice(0, 800).toLowerCase();
+  return head.includes("<!doctype") || head.includes("<html") || head.includes("not a bot") || head.includes("captcha");
+}
+function parseRetryAfter2(v) {
+  if (v == null) return 0;
+  const s = Number(v);
+  if (Number.isFinite(s) && s > 0) return s * 1e3;
+  const d = Date.parse(v);
+  return Number.isFinite(d) ? Math.max(0, d - Date.now()) : 0;
 }
 async function openSourceSearch(source, query, limit = 5) {
   const q = String(query ?? "").trim();
@@ -2121,6 +2153,11 @@ async function openSourceSearch(source, query, limit = 5) {
         }))
       };
     }
+    if (source === "openreview") {
+      const r2 = await get("https://api2.openreview.net/notes/search?term=" + enc(q) + "&limit=" + n + "&source=forum&content=title");
+      const notes = Array.isArray(r2?.notes) ? r2.notes : [];
+      return { source, query: q, hits: notes.map(mapOpenReview), note: "public notes API (api2)" };
+    }
     const r = await get("https://www.ebi.ac.uk/chembl/api/data/molecule.json?limit=" + n + "&search=" + enc(q));
     const items = r?.molecules ?? [];
     return { source, query: q, hits: items.map(mapChembl) };
@@ -2128,10 +2165,28 @@ async function openSourceSearch(source, query, limit = 5) {
     return { source, query: q, hits: [], error: String(err.message ?? err).slice(0, 140) };
   }
 }
-async function get(url) {
+async function get(url, attempt = 0) {
+  const host = new URL(url).host;
   const res = await fetch(url, { headers: { "User-Agent": UA6, Accept: "application/json" }, signal: AbortSignal.timeout(2e4), redirect: "follow" });
-  if (!res.ok) throw new Error("HTTP " + res.status + " from " + new URL(url).host);
-  return res.json();
+  if (res.status === 429 || res.status === 503 || res.status === 502) {
+    if (attempt < 2) {
+      const wait = parseRetryAfter2(res.headers.get("retry-after")) || (attempt === 0 ? 2e3 : 6e3);
+      await new Promise((r) => setTimeout(r, Math.min(wait, 2e4)));
+      return get(url, attempt + 1);
+    }
+    throw new Error("HTTP " + res.status + " from " + host + " \u2014 rate-limited, and two backed-off retries did not clear it; retry later or use another source");
+  }
+  if (!res.ok) throw new Error("HTTP " + res.status + " from " + host);
+  const ct = res.headers.get("content-type") ?? "";
+  const text = await res.text();
+  if (looksGated(ct, text)) {
+    throw new Error("gated: " + host + " answered a bot check / HTML page instead of JSON \u2014 this source is closed to plain clients from here (measured on dblp.org 2026-09-20); use another source");
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("unparseable body from " + host + " (content-type: " + (ct || "none") + ")");
+  }
 }
 
 // src/server.ts
@@ -2810,7 +2865,7 @@ async function apply(ctx) {
     name: "search_open",
     description: "Search credential-free research sources: crossref (DOI metadata for any registered work), europepmc (life sciences + preprints), pubmed (biomedical index), figshare (research outputs/datasets), clinicaltrials (registered studies), openfda (drug adverse-event reports), chembl (compounds/bioactivity). Every one answered HTTP 200 from this machine with no key. Sources that need a login are deliberately NOT here.",
     parameters: {
-      source: { type: "string", required: true, description: "crossref | europepmc | pubmed | figshare | clinicaltrials | openfda | chembl" },
+      source: { type: "string", required: true, description: "crossref | europepmc | pubmed | figshare | clinicaltrials | openfda | chembl | openreview (conference submissions incl. rejected papers)" },
       query: { type: "string", required: true, description: "search terms (for openfda: a drug name)" },
       limit: { type: "number", description: "max results (default 5, max 25)" }
     },

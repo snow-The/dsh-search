@@ -131,7 +131,7 @@ export async function apply(ctx: any) {
     name: 'search_open',
     description: 'Search credential-free research sources: crossref (DOI metadata for any registered work), europepmc (life sciences + preprints), pubmed (biomedical index), figshare (research outputs/datasets), clinicaltrials (registered studies), openfda (drug adverse-event reports), chembl (compounds/bioactivity). Every one answered HTTP 200 from this machine with no key. Sources that need a login are deliberately NOT here.',
     parameters: {
-      source: { type: 'string', required: true, description: 'crossref | europepmc | pubmed | figshare | clinicaltrials | openfda | chembl' },
+      source: { type: 'string', required: true, description: 'crossref | europepmc | pubmed | figshare | clinicaltrials | openfda | chembl | openreview (conference submissions incl. rejected papers)' },
       query: { type: 'string', required: true, description: 'search terms (for openfda: a drug name)' },
       limit: { type: 'number', description: 'max results (default 5, max 25)' },
     },

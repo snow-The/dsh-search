@@ -9,7 +9,7 @@
  * Lens, EPO OPS, Springer, PatentsView) are deliberately absent -- not out of caution, but because
  * a tool that silently 401s is worse than no tool.
  */
-export type OpenSourceId = 'crossref' | 'europepmc' | 'pubmed' | 'figshare' | 'clinicaltrials' | 'openfda' | 'chembl';
+export type OpenSourceId = 'crossref' | 'europepmc' | 'pubmed' | 'figshare' | 'clinicaltrials' | 'openfda' | 'chembl' | 'openreview';
 export interface OpenHit {
     title: string;
     url: string;
@@ -36,4 +36,19 @@ export declare function mapFigshare(r: Record<string, unknown>): OpenHit;
 export declare function mapClinicalTrial(s: Record<string, unknown>): OpenHit;
 /** ChEMBL: molecules[] */
 export declare function mapChembl(m: Record<string, unknown>): OpenHit;
+/**
+ * OpenReview v2 wraps every content field: `{ "title": { "value": "..." } }`, not a bare string.
+ * Verified from this machine 2026-09-20: `api2.openreview.net/notes/search?term=&limit=` answers
+ * anonymously (a `content.title=` filter 403s instead — that path needs credentials).
+ */
+export declare function mapOpenReview(n: Record<string, unknown>): OpenHit;
+/**
+ * A bot-check / HTML interstitial served with HTTP 200.
+ *
+ * Several catalogues do this, and DBLP is the one we measured: `dblp.org/search/publ/api` answers
+ * 200 with an Anubis proof-of-work page ("Making sure you are not a bot") even for a browser
+ * User-Agent — so the old single-shot `res.json()` died with `Unexpected token <`, an error that
+ * reads like OUR parsing bug rather than "this source is closed to plain clients".
+ */
+export declare function looksGated(contentType: string, body: string): boolean;
 export declare function openSourceSearch(source: OpenSourceId, query: string, limit?: number): Promise<OpenResult>;
