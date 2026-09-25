@@ -32,7 +32,7 @@ export function rebuildAbstract(inv: Record<string, number[]> | null | undefined
     for (const p of positions) if (Number.isInteger(p) && p >= 0) slots[p] = word;
   }
   const text = slots.filter((s) => s !== undefined).join(' ').replace(/\s+/g, ' ').trim();
-  return text.length > maxChars ? text.slice(0, maxChars) + '…' : text;
+  return text.length > maxChars ? text.slice(0, maxChars).toWellFormed() + '…' : text;
 }
 
 /** A stable, citable id: the arXiv id when the work has one, else the DOI, else the OpenAlex id. */

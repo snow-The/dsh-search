@@ -1650,9 +1650,9 @@ function formatResult(status, headers, json) {
   }
   if (typeof json === "object") {
     const s = JSON.stringify(json, null, 2);
-    return s.length > 4e3 ? s.slice(0, 4e3) + "\n\u2026 (truncated)" : s;
+    return s.length > 4e3 ? s.slice(0, 4e3).toWellFormed() + "\n\u2026 (truncated)" : s;
   }
-  return String(json).slice(0, 4e3);
+  return String(json).slice(0, 4e3).toWellFormed();
 }
 async function callOpenApi(args) {
   const doc = await parseSpec(args.spec);
@@ -1692,7 +1692,7 @@ function rebuildAbstract(inv, maxChars = 1200) {
     for (const p of positions) if (Number.isInteger(p) && p >= 0) slots[p] = word;
   }
   const text = slots.filter((s) => s !== void 0).join(" ").replace(/\s+/g, " ").trim();
-  return text.length > maxChars ? text.slice(0, maxChars) + "\u2026" : text;
+  return text.length > maxChars ? text.slice(0, maxChars).toWellFormed() + "\u2026" : text;
 }
 function workId(w) {
   const arxiv = w.ids?.arxiv;

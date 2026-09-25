@@ -234,9 +234,9 @@ export function formatResult(status: number, headers: Headers, json: unknown): s
   }
   if (typeof json === 'object') {
     const s = JSON.stringify(json, null, 2);
-    return s.length > 4000 ? s.slice(0, 4000) + '\n… (truncated)' : s;
+    return s.length > 4000 ? s.slice(0, 4000).toWellFormed() + '\n… (truncated)' : s;
   }
-  return String(json).slice(0, 4000);
+  return String(json).slice(0, 4000).toWellFormed();
 }
 
 export interface OpenApiCallArgs {
