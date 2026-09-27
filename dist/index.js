@@ -2191,87 +2191,113 @@ async function get(url, attempt = 0) {
 
 // src/server.ts
 init_query();
-import { Hono } from "hono";
 import { createServer } from "node:http";
-import { Readable } from "node:stream";
-function createApp() {
-  const app = new Hono();
-  app.get("/health", (c) => c.json({ ok: true, chunks: getStore().count() }));
-  app.get("/fetch", async (c) => {
-    const url = c.req.query("url") ?? "";
-    if (!/^https?:\/\//i.test(url)) return new Response(JSON.stringify({ error: "url must start with http(s)://" }), { status: 400, headers: { "Content-Type": "application/json" } });
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (dsh-search)" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(25e3)
-    });
-    if (!res.ok) return new Response(JSON.stringify({ error: "HTTP " + res.status }), { status: res.status, headers: { "Content-Type": "application/json" } });
-    return c.json({ url, text: extractText(await res.text()) });
-  });
-  app.get("/github", async (c) => {
-    const q = c.req.query("q") ?? "";
-    const kind = c.req.query("type") ?? "repo";
-    if (!q) return new Response(JSON.stringify({ error: "q required" }), { status: 400, headers: { "Content-Type": "application/json" } });
-    const r = await githubSearch(kind, q, { perPage: Number(c.req.query("perPage")) || 10 });
-    return c.json(r);
-  });
-  app.post("/corpus", async (c) => {
-    const body = await c.req.json().catch(() => ({ urls: [] }));
-    const urls = (body.urls ?? []).filter((u) => /^https?:\/\//i.test(u));
-    if (!urls.length) return new Response(JSON.stringify({ error: "no valid urls" }), { status: 400, headers: { "Content-Type": "application/json" } });
+var sendJson = (res, status, value) => {
+  res.statusCode = status;
+  res.setHeader("content-type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(value));
+};
+async function readBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+var BROWSER_HEADERS = { "User-Agent": "Mozilla/5.0 (dsh-search)" };
+var fetchPage = (url) => fetch(url, { headers: BROWSER_HEADERS, redirect: "follow", signal: AbortSignal.timeout(25e3) });
+var isHttpUrl = (u) => /^https?:\/\//i.test(u);
+var ROUTES = [
+  ["GET", "/health", (_req, res) => {
+    sendJson(res, 200, { ok: true, chunks: getStore().count() });
+  }],
+  ["GET", "/fetch", async (_req, res, url) => {
+    const target = url.searchParams.get("url") ?? "";
+    if (!isHttpUrl(target)) {
+      sendJson(res, 400, { error: "url must start with http(s)://" });
+      return;
+    }
+    const page = await fetchPage(target);
+    if (!page.ok) {
+      sendJson(res, page.status, { error: "HTTP " + page.status });
+      return;
+    }
+    sendJson(res, 200, { url: target, text: extractText(await page.text()) });
+  }],
+  ["GET", "/github", async (_req, res, url) => {
+    const q = url.searchParams.get("q") ?? "";
+    const kind = url.searchParams.get("type") ?? "repo";
+    if (!q) {
+      sendJson(res, 400, { error: "q required" });
+      return;
+    }
+    const r = await githubSearch(kind, q, { perPage: Number(url.searchParams.get("perPage")) || 10 });
+    sendJson(res, 200, r);
+  }],
+  ["POST", "/corpus", async (req, res) => {
+    let body = {};
+    try {
+      body = JSON.parse(await readBody(req));
+    } catch {
+    }
+    const urls = (body?.urls ?? []).filter((u) => isHttpUrl(u));
+    if (!urls.length) {
+      sendJson(res, 400, { error: "no valid urls" });
+      return;
+    }
     const store2 = getStore();
     let indexed = 0;
-    for (const url of urls) {
+    for (const u of urls) {
       try {
-        const res = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0 (dsh-search)" },
-          redirect: "follow",
-          signal: AbortSignal.timeout(25e3)
-        });
-        if (!res.ok) continue;
-        const chunks = chunkText(extractText(await res.text()));
+        const page = await fetchPage(u);
+        if (!page.ok) continue;
+        const chunks = chunkText(extractText(await page.text()));
         if (!chunks.length) continue;
-        indexed += store2.add(url, chunks, await embedTexts(chunks));
+        indexed += store2.add(u, chunks, await embedTexts(chunks));
       } catch {
       }
     }
-    return c.json({ indexed, total: store2.count() });
-  });
-  app.get("/corpus/search", async (c) => {
-    const q = c.req.query("q") ?? "";
-    const k = Math.min(Number(c.req.query("k") ?? 5) || 5, 20);
-    if (!q.trim()) return new Response(JSON.stringify({ error: "q required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+    sendJson(res, 200, { indexed, total: store2.count() });
+  }],
+  ["GET", "/corpus/search", async (_req, res, url) => {
+    const q = url.searchParams.get("q") ?? "";
+    const k = Math.min(Number(url.searchParams.get("k") ?? 5) || 5, 20);
+    if (!q.trim()) {
+      sendJson(res, 400, { error: "q required" });
+      return;
+    }
     const vec = (await embedTexts([q]))[0];
-    return c.json({ results: getStore().search(vec, k) });
-  });
-  app.delete("/corpus", (c) => {
+    sendJson(res, 200, { results: getStore().search(vec, k) });
+  }],
+  ["DELETE", "/corpus", (_req, res) => {
     getStore().clear();
-    return c.json({ cleared: true });
-  });
-  return app;
+    sendJson(res, 200, { cleared: true });
+  }]
+];
+async function handleRequest(req, res) {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1");
+  const method = (req.method ?? "GET").toUpperCase();
+  const onPath = ROUTES.filter(([, path]) => path === url.pathname);
+  const route = onPath.find(([m]) => m === method);
+  if (!route) {
+    if (onPath.length > 0) {
+      res.statusCode = 405;
+      res.setHeader("allow", onPath.map(([m]) => m).join(", "));
+      res.end();
+      return;
+    }
+    sendJson(res, 404, { error: "not found" });
+    return;
+  }
+  try {
+    await route[2](req, res, url);
+  } catch (e) {
+    sendJson(res, 500, { error: String(e.message ?? e) });
+  }
 }
 function maybeStartServer() {
   const port = Number(process.env.DSH_SEARCH_HTTP_PORT ?? 0);
   if (!port) return null;
-  const app = createApp();
   const server = createServer((req, res) => {
-    const url = "http://127.0.0.1:" + port + (req.url ?? "/");
-    const hasBody = req.method === "POST" || req.method === "PUT" || req.method === "PATCH";
-    const init = {
-      method: req.method,
-      headers: req.headers
-    };
-    if (hasBody) init.body = Readable.toWeb(req);
-    (async () => {
-      try {
-        const r = await app.fetch(new Request(url, init));
-        res.writeHead(r.status, Object.fromEntries(r.headers.entries()));
-        res.end(await r.text());
-      } catch (e) {
-        res.writeHead(500);
-        res.end(String(e.message ?? e));
-      }
-    })();
+    void handleRequest(req, res);
   });
   server.listen(port, "127.0.0.1");
   return () => {

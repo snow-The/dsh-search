@@ -4,7 +4,7 @@
  *  - search_github: first-party GitHub search (repos/code/issues/commits, no Google)
  *  - search_corpus_add / search_corpus_search / search_corpus_clear:
  *    ephemeral vector corpus (node:sqlite + ARK embedding w/ local fallback)
- *  - optional hono HTTP API (DSH_SEARCH_HTTP_PORT)
+ *  - optional local HTTP API on native node:http (DSH_SEARCH_HTTP_PORT)
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { extractText, chunkText, embedTexts, getStore, resetStore } from './query.js';
@@ -358,7 +358,7 @@ export async function apply(ctx: any) {
   // --- v0.4 web search provider (Bing/DDG/SearXNG free; Exa/Tavily keyed) ---
   // Config: env EXA_API_KEY / TAVILY_API_KEY; optional env DSH_SEARCH_PROVIDER (default engine)
   
-  // optional hono HTTP daemon
+  // optional local HTTP daemon (native node:http; default off — DSH_SEARCH_HTTP_PORT)
   const stop = maybeStartServer();
   if (stop) {
     ctx.onDispose?.(stop);

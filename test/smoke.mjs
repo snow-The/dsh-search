@@ -5,7 +5,7 @@
 // after bundling - which is what the plugin actually ships.
 import { extractText, chunkText, hashEmbed, cosine, CorpusStore } from '../.test-build/query.js';
 import { githubSearch, githubToken } from '../.test-build/github.js';
-import { createApp } from '../.test-build/server.js';
+import { handleRequest } from '../.test-build/server.js';
 
 const html = '<html><head><style>body{}</style></head><body><nav>menu</nav><h1>Hello &amp; World</h1><p>Sentence one. Sentence two!</p><script>var x=1;</script></body></html>';
 console.log('EXTRACT:', JSON.stringify(extractText(html)));
@@ -31,9 +31,17 @@ console.log('GITHUB_TOKEN:', tok ? tok.slice(0, 6) + '...' : '(none)');
 const r = await githubSearch('repo', 'deepseek harness', { perPage: 3 });
 console.log('GH REPO:', r.error ? 'ERR ' + r.error : 'total=' + r.total + ' | ' + r.hits.map(h => h.title + ' ★' + (h.extra?.stars ?? '?')).join(' ; '));
 
-const app = createApp();
-const h = await app.fetch(new Request('http://localhost/health'));
-console.log('HONO /health:', h.status, await h.text());
-const g = await app.fetch(new Request('http://localhost/github?q=hono&type=repo&perPage=2'));
-const gj = await g.json();
-console.log('HONO /github:', g.status, 'total=' + gj.total, '| ' + (gj.hits ?? []).map(x => x.title).join(' ; '));
+// 直接驱动原生 node:http handler(假 res 捕获 status/body) —— server.ts 已不带 hono,
+// 也不再需要 app.fetch(new Request(...)) 那座 Node↔Fetch 桥。
+const call = async (method, path, body) => {
+  const res = { statusCode: 0, headers: {}, body: undefined, setHeader(k, v) { this.headers[k] = v }, end(b) { this.body = b } };
+  const req = { method, url: path };
+  if (body !== undefined) req[Symbol.asyncIterator] = async function* () { yield Buffer.from(body) };
+  await handleRequest(req, res);
+  return { status: res.statusCode, text: () => String(res.body ?? ''), json: () => JSON.parse(String(res.body ?? 'null')) };
+};
+const h = await call('GET', '/health');
+console.log('NATIVE /health:', h.status, h.text());
+const g = await call('GET', '/github?q=hono&type=repo&perPage=2');
+const gj = g.json();
+console.log('NATIVE /github:', g.status, 'total=' + gj.total, '| ' + (gj.hits ?? []).map(x => x.title).join(' ; '));
