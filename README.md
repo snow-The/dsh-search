@@ -25,12 +25,17 @@ Universal search toolkit for DeepSeek Harness — browser-less, GPU-free, works 
     `401` + `WWW-Authenticate: Bearer`. Port set without a token = the daemon **refuses to start**
     and says so, rather than silently serving unauthenticated.
   - Why the daemon enforces its own gate instead of mounting on the official `ctx.webServer`:
-    `dsh-host-webserver` is a bare router with **no auth of its own** (measured: zero
-    authorization/token/401/403/origin mentions in that package; the web-app's `resolveLanTrust`
-    is a Host allowlist for DNS-rebinding, not authentication). Moving these routes there would
-    not add a fence — it would only put generic paths like `/fetch` and `/corpus` on the GUI port,
-    sharing the GUI's bind range (which may be `0.0.0.0`) and competing for path space. A separate
-    loopback-only port with its own switch is the stronger boundary.
+    `dsh-host-webserver` (`ctx.webServer`) is a **bare router with no authentication at all**
+    (measured: zero authorization/token/401/403/origin mentions in that package), so mounting
+    there would inherit no fence while putting generic paths like `/fetch` and `/corpus` on the
+    GUI port, sharing the GUI's bind range (which may be `0.0.0.0`) and competing for path space.
+    The official Host/Origin + browser-auth **fence does exist — in `ctx.connection`
+    (`dsh-client-connection`), not in the webserver** (`isTrustedApiRequest` → 403,
+    `requestRejection` → 401). It targets browser-initiated cross-site calls and admits requests
+    with no `Origin` header, so it is the wrong control for this daemon's non-browser consumers:
+    a separate loopback-only port and a bearer token are. If these routes ever need to be callable
+    from the GUI's browser session, use `ctx.connection.requestRejection()` (see `dsh-busyloop`'s
+    `createRequestFence()` for the working call shape).
 
 ## GitHub search qualifiers (pass through)
 

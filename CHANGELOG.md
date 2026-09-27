@@ -25,20 +25,31 @@
   Verified by occupying the port first and confirming the process survives the event and the
   occupying listener is untouched.
 
-- **docs: correct a false claim carried by 0957a60.** That commit is titled "mount routes on the
-  official `ctx.webServer`, drop Hono" and its body asserts the official service "owns the fence
-  (Host/Origin + auth)". **Hono was indeed dropped, but nothing was ever mounted on
-  `ctx.webServer`** — that identifier appears in `src/` only inside comments. The fence claim is
-  also false: `@deepseek-ai/dsh-host-webserver` self-describes as knowing "no harness concepts"
-  with handlers that "retain direct response ownership", and a search of that package for
-  authorization/token/401/403/origin returns **zero hits**. The real trust logic lives in
-  `dsh-web-app`'s `resolveLanTrust()`, which builds a **Host allowlist** (DNS-rebinding
-  protection), not an authentication layer.
-  - Consequence, recorded so the question is not reopened: migrating these six generic routes
-    (`/fetch`, `/github`, `/corpus`, ...) onto `ctx.webServer` would **not** add security. It
-    would place them on the GUI port, sharing that server's bind host (which may be `0.0.0.0`)
-    and competing for path space with the GUI and every other plugin. A separate loopback-only
-    port behind its own switch is the stronger boundary; access control is the bearer gate above.
+- **docs: correct a misleading claim carried by 0957a60.** That commit is titled "mount routes on
+  the official `ctx.webServer`, drop Hono" and its body asserts the official service "owns the
+  fence (Host/Origin + auth)". **Hono was indeed dropped, but nothing was ever mounted on
+  `ctx.webServer`** — that identifier appears in `src/` only inside comments. The service was
+  also mis-cited, and that distinction matters:
+  - `@deepseek-ai/dsh-host-webserver` (`ctx.webServer`) is a **bare router with no authentication
+    at all**. It self-describes as knowing "no harness concepts" with handlers that "retain direct
+    response ownership", and a search of that package for authorization/token/401/403/origin
+    returns **zero hits**. It genuinely has no fence.
+  - **The fence is real, but it lives in `ctx.connection`** (`dsh-client-connection`, cordis
+    service `client-connection`), not in the webserver: `isTrustedApiRequest()`
+    (`dsh-client-connection/lib/index.js:205-219`) enforces a Host/Origin check returning **403**,
+    and `requestRejection()` (`:586-589`) follows it with browser-session authentication returning
+    **401**. Note `:213` — a request with **no `Origin` header is admitted**, so that gate targets
+    browser-initiated cross-site calls (DNS rebinding, CSRF) and does not by itself stop a
+    command-line client.
+  - Consequence, recorded so the question is not reopened: this daemon's consumers are non-browser,
+    so the official browser fence is not the right control here — the bearer token below is.
+    Migrating these six generic routes (`/fetch`, `/github`, `/corpus`, ...) onto `ctx.webServer`
+    would additionally place them on the GUI port, sharing that server's bind host (which may be
+    `0.0.0.0`) and competing for path space with the GUI and every other plugin, **without**
+    inheriting any fence from `webServer` itself. A separate loopback-only port with its own switch
+    is the stronger boundary. (If these routes ever need to be callable from the GUI's own browser
+    session, the correct move is `ctx.connection.requestRejection()` — see `dsh-busyloop`'s
+    `createRequestFence()` for the working call shape.)
   - The commit is already on `origin/main`, so history was left intact and the correction is
     recorded here (plus the README) instead of being force-pushed over.
 

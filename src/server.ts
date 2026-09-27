@@ -13,14 +13,21 @@
  * 供外部消费者使用, 与 GUI 同源策略无关。
  *
  * 为什么不改成挂在 ctx.webServer 上(2026-09-28 实测后的结论):
- * `dsh-host-webserver` 自述 "It knows no harness concepts ... Route handlers retain
- * direct response ownership." —— 它只是一个裸 router, **不含任何鉴权/围栏**
- * (在该包内搜 authorization/token/401/403/origin 零命中)。真正的信任逻辑在
- * `dsh-web-app` 的 `resolveLanTrust()` 里, 而那只是 host 白名单(DNS-rebinding 防护),
- * 不是认证。所以"挂到官方 webServer 就更安全"是错的: 那只会把这 6 个通用路径
- * (/fetch /github /corpus ...) 挪到 GUI 端口上, 与 GUI **共享绑定范围**
- * (webServer 的 host 允许 '0.0.0.0') 并与其他插件抢路径。本 daemon 独立端口、
- * 独立开关、只绑回环 —— 边界反而更强。安全靠下面那道 token 闸门, 不靠挪端口。
+ * `dsh-host-webserver`(即 ctx.webServer) 自述 "It knows no harness concepts ... Route
+ * handlers retain direct response ownership." —— 它只是一个裸 router, **不含任何鉴权**
+ * (在该包内搜 authorization/token/401/403/origin 零命中)。
+ * 但官方的 Host/Origin + 浏览器鉴权**围栏确实存在, 只是在另一个服务里**: `ctx.connection`
+ * (`dsh-client-connection`)。`isTrustedApiRequest()`(lib/index.js:205-219) 做 Host/Origin
+ * 检查返回 403, `requestRejection()`(:586-589) 再接浏览器会话鉴权返回 401。注意 `:213` ——
+ * **没有 Origin 头的请求直接放行**, 所以那道闸门针对的是浏览器发起的跨站调用(DNS rebinding /
+ * CSRF), 本身拦不住命令行消费者。
+ *
+ * 结论: 本 daemon 的消费者是**非浏览器**的, 所以官方浏览器围栏不是这里该用的控件 ——
+ * 该用的是下面这道 bearer token。挂到 ctx.webServer 既不会继承任何围栏(webServer 自己没有),
+ * 又会把这 6 个通用路径(/fetch /github /corpus ...)挪到 GUI 端口上与 GUI **共享绑定范围**
+ * (webServer 的 host 允许 '0.0.0.0')并与其他插件抢路径。独立端口 + 独立开关 + 只绑回环,
+ * 边界更强。若将来这些路由需要被 GUI 的浏览器会话直接调用, 正确做法是
+ * `ctx.connection.requestRejection()`(调用形状见 dsh-busyloop 的 createRequestFence())。
  *
  * 鉴权(DSH_SEARCH_HTTP_TOKEN): 设了就**强制**校验 `Authorization: Bearer <token>`,
  * 未设则保持无鉴权(向后兼容: 外部消费者不必立刻改)。闸门在路由匹配**之前** ——
