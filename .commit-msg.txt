@@ -1,0 +1,29 @@
+fix(server): require a bearer token, and never let a listen failure kill the harness
+
+Three things, found by probing rather than by reading:
+
+1. The optional HTTP daemon had no authentication at all. It is this plugin's ONLY
+   HTTP surface, so it now requires DSH_SEARCH_HTTP_TOKEN (>=16 chars) and checks
+   `Authorization: Bearer <token>` before route matching -- unauthenticated callers
+   get 401 and cannot tell an existing path from a missing one. Fail-closed: the port
+   without a token refuses to start and says why. Backward compatible (no env token =
+   no gate), which is why the existing suite needed no changes.
+
+2. A listen failure crashed the process. `server.listen()` on a taken port emits
+   'error'; unhandled, that is an uncaught exception that took the whole DSH process
+   down. A daemon that cannot bind must only fail to exist.
+
+3. 0957a60's message was false and is corrected in README + CHANGELOG. It claims the
+   routes were mounted on the official ctx.webServer and that the seam "owns the fence
+   (Host/Origin + auth)". Nothing was ever mounted on ctx.webServer (that identifier
+   appears in src/ only in comments), and the fence does not exist: dsh-host-webserver
+   is a bare router with zero auth code, and dsh-web-app's resolveLanTrust() is a Host
+   allowlist for DNS rebinding, not authentication. So migrating these six generic
+   routes there would not add security -- it would put /fetch and /corpus on the GUI
+   port, sharing a bind host that may be 0.0.0.0. The commit is already on origin/main,
+   so history was left intact and the record corrected in the docs instead.
+
+Verification: test/daemon-auth.test.mjs proves the gate in BOTH directions (a
+reject-everything gate would otherwise also pass), plus real-socket probes for the
+live TCP path, the deployed artifact via apply(), and the EADDRINUSE survival.
+45/45 tests pass; tsc clean.

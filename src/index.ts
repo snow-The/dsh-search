@@ -13,7 +13,7 @@ import { callOpenApi } from './openapi.js';
 import { arxivSearchBatch, formatBatch } from './arxiv.js';
 import { hubSearch, type HubKind } from './hubs.js';
 import { openSourceSearch, OPEN_SOURCES, type OpenSourceId } from './opensources.js';
-import { maybeStartServer } from './server.js';
+import { maybeStartServer, daemonConfigIssue } from './server.js';
 import { registerWebProvider, registerPlatformSearchTool, type SearchConfig } from './websearch.js';
 
 const textOut = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] };
@@ -358,9 +358,14 @@ export async function apply(ctx: any) {
   // --- v0.4 web search provider (Bing/DDG/SearXNG free; Exa/Tavily keyed) ---
   // Config: env EXA_API_KEY / TAVILY_API_KEY; optional env DSH_SEARCH_PROVIDER (default engine)
   
-  // optional local HTTP daemon (native node:http; default off — DSH_SEARCH_HTTP_PORT)
+  // optional local HTTP daemon (native node:http; default off — DSH_SEARCH_HTTP_PORT,
+  // and since 0.5.1 it also requires DSH_SEARCH_HTTP_TOKEN: the daemon is the plugin's
+  // only HTTP surface and the official webServer carries no fence of its own).
+  const issue = daemonConfigIssue();
+  if (issue) console.warn('[dsh-search] HTTP daemon disabled: ' + issue);
   const stop = maybeStartServer();
   if (stop) {
+    console.log('[dsh-search] HTTP daemon listening on 127.0.0.1:' + String(process.env.DSH_SEARCH_HTTP_PORT) + ' (bearer token required)');
     ctx.onDispose?.(stop);
   }
 }

@@ -20,6 +20,17 @@ Universal search toolkit for DeepSeek Harness — browser-less, GPU-free, works 
 - GitHub token: `GITHUB_TOKEN`/`GH_PAT` env or `~/.dsh/.credentials.yaml` refs (line-based parse). Code search requires auth (GitHub rule). Unauthenticated: 10 req/min
 - Optional local HTTP API on native `node:http`: set `DSH_SEARCH_HTTP_PORT` (loopback only):
   - `GET /health`, `GET /fetch?url=`, `GET /github?q=&type=repo|code|issue|commit`, `POST /corpus {urls}`, `GET /corpus/search?q=&k=`, `DELETE /corpus`
+  - **Auth (v0.5.1, required):** the port alone is no longer enough — also set `DSH_SEARCH_HTTP_TOKEN`
+    (≥16 chars) and every request must carry `Authorization: Bearer <token>`; anything else gets
+    `401` + `WWW-Authenticate: Bearer`. Port set without a token = the daemon **refuses to start**
+    and says so, rather than silently serving unauthenticated.
+  - Why the daemon enforces its own gate instead of mounting on the official `ctx.webServer`:
+    `dsh-host-webserver` is a bare router with **no auth of its own** (measured: zero
+    authorization/token/401/403/origin mentions in that package; the web-app's `resolveLanTrust`
+    is a Host allowlist for DNS-rebinding, not authentication). Moving these routes there would
+    not add a fence — it would only put generic paths like `/fetch` and `/corpus` on the GUI port,
+    sharing the GUI's bind range (which may be `0.0.0.0`) and competing for path space. A separate
+    loopback-only port with its own switch is the stronger boundary.
 
 ## GitHub search qualifiers (pass through)
 

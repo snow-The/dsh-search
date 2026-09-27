@@ -2197,6 +2197,24 @@ var sendJson = (res, status, value) => {
   res.setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(value));
 };
+var MIN_TOKEN_LENGTH = 16;
+var timingSafeEqual = (a, b) => {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  return ab.length === bb.length && ab.equals(bb);
+};
+function bearerToken(req) {
+  const raw = req.headers?.authorization;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return null;
+  const m = /^\s*Bearer\s+(\S+)\s*$/i.exec(value);
+  return m ? m[1] : null;
+}
+function isAuthorized(req, token) {
+  if (!token) return true;
+  const presented = bearerToken(req);
+  return presented !== null && timingSafeEqual(presented, token);
+}
 async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -2272,7 +2290,12 @@ var ROUTES = [
     sendJson(res, 200, { cleared: true });
   }]
 ];
-async function handleRequest(req, res) {
+async function handleRequest(req, res, token = process.env.DSH_SEARCH_HTTP_TOKEN ?? null) {
+  if (!isAuthorized(req, token)) {
+    res.setHeader?.("www-authenticate", "Bearer");
+    sendJson(res, 401, { error: "unauthorized" });
+    return;
+  }
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const method = (req.method ?? "GET").toUpperCase();
   const onPath = ROUTES.filter(([, path]) => path === url.pathname);
@@ -2293,11 +2316,27 @@ async function handleRequest(req, res) {
     sendJson(res, 500, { error: String(e.message ?? e) });
   }
 }
+function daemonConfigIssue() {
+  if (!Number(process.env.DSH_SEARCH_HTTP_PORT ?? 0)) return null;
+  const token = process.env.DSH_SEARCH_HTTP_TOKEN ?? "";
+  if (!token) return "DSH_SEARCH_HTTP_PORT is set but DSH_SEARCH_HTTP_TOKEN is not \u2014 refusing to start an unauthenticated daemon";
+  if (token.length < MIN_TOKEN_LENGTH) return `DSH_SEARCH_HTTP_TOKEN is shorter than ${MIN_TOKEN_LENGTH} chars \u2014 refusing to start`;
+  return null;
+}
 function maybeStartServer() {
   const port = Number(process.env.DSH_SEARCH_HTTP_PORT ?? 0);
   if (!port) return null;
+  const issue = daemonConfigIssue();
+  if (issue) {
+    console.warn("[dsh-search] " + issue);
+    return null;
+  }
+  const token = process.env.DSH_SEARCH_HTTP_TOKEN ?? null;
   const server = createServer((req, res) => {
-    void handleRequest(req, res);
+    void handleRequest(req, res, token);
+  });
+  server.on("error", (e) => {
+    console.warn("[dsh-search] HTTP daemon failed to listen on 127.0.0.1:" + String(port) + " \u2014 " + e.message);
   });
   server.listen(port, "127.0.0.1");
   return () => {
@@ -3131,8 +3170,11 @@ async function apply(ctx) {
       return "iterations: " + res.iterations + " | queries: " + res.queries.length + " | sources: " + res.sources.length + "\n\n" + res.answer;
     }
   }));
+  const issue = daemonConfigIssue();
+  if (issue) console.warn("[dsh-search] HTTP daemon disabled: " + issue);
   const stop = maybeStartServer();
   if (stop) {
+    console.log("[dsh-search] HTTP daemon listening on 127.0.0.1:" + String(process.env.DSH_SEARCH_HTTP_PORT) + " (bearer token required)");
     ctx.onDispose?.(stop);
   }
 }
