@@ -2821,7 +2821,6 @@ var textOut = { schema: { type: "string" }, render: (_a, v) => [{ type: "text", 
 var name = "dsh-search";
 var inject = ["tools", "web"];
 async function apply(ctx) {
-  console.log("[dsh-search] apply called, ctx.web =", !!ctx.web, ", registerSearchProvider =", typeof ctx.web?.registerSearchProvider);
   const searchCfg = () => ({
     provider: process.env.DSH_SEARCH_PROVIDER || "bing",
     cache: true,

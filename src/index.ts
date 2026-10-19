@@ -22,7 +22,8 @@ export const name = 'dsh-search';
 export const inject = ['tools', 'web'];
 
 export async function apply(ctx: any) {
-  console.log('[dsh-search] apply called, ctx.web =', !!ctx.web, ', registerSearchProvider =', typeof (ctx.web as any)?.registerSearchProvider);
+  // 启动不再打「apply called + 值 dump」：失败路径 registerWebProvider 自己会 warn
+  // 「ctx.web.registerSearchProvider unavailable」，成功路径不需要一行噪音（约定 ④）。
   const searchCfg = (): SearchConfig => ({
     provider: process.env.DSH_SEARCH_PROVIDER || 'bing',
     cache: true,
