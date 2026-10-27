@@ -545,14 +545,27 @@ export function registerWebProvider(ctx: any, cfg: () => SearchConfig): void {
     console.warn('[dsh-search] ctx.web.registerSearchProvider unavailable (ctx.web=' + !!ctx.web + '), provider NOT registered');
     return;
   }
-  console.log('[dsh-search] registering provider dsh-search');
   const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
-  console.log('[dsh-search] provider registered OK');
+
+  // 注册成功 ≠ 生效。web_search 认的是 ctx.web.searchProviderId，它可以被别的插件
+  // 或 patch 层指到别家；而本插件的 platform_search 走自己的免费链（bing/ddg/searxng），
+  // 完全不看这个字段。两条路一分岔，症状就是「搜索坏了」：
+  //   2026-10-27 实例 —— 被写成 commandcode，web_search 于是去买对方的搜索额度，
+  //   用完即 400 insufficient credits；同期 platform_search 正常出结果。
+  //
+  // 所以这里必须回读并说明「实际生效的是谁」，指到别家时告警 —— 不能让配置静默夺走路由。
+  let effective = '';
   try {
-    if (!ctx.web.searchProviderId) {
-      ctx.web.searchProviderId = 'dsh-search';
-    }
-  } catch { /* runtime override not supported on this version */ }
+    if (!ctx.web.searchProviderId) ctx.web.searchProviderId = 'dsh-search';
+    effective = String(ctx.web.searchProviderId ?? '');
+  } catch { /* 该版本不支持运行期覆盖；回读失败就按未知处理 */ }
+
+  // 启动期只留一行 info（约定 ④）。
+  if (effective === 'dsh-search') {
+    console.log('[dsh-search] provider registered OK (web_search -> dsh-search)');
+  } else {
+    console.warn('[dsh-search] provider registered, but web_search routes to "' + (effective || 'unknown') + '" instead of the free local chain (bing/ddg/searxng); platform_search still uses it');
+  }
   try {
     if (typeof ctx.onDispose === 'function') {
       ctx.onDispose(() => { try { disposer(); } catch { /* noop */ } });

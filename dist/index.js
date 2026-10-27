@@ -2794,14 +2794,17 @@ function registerWebProvider(ctx, cfg) {
     console.warn("[dsh-search] ctx.web.registerSearchProvider unavailable (ctx.web=" + !!ctx.web + "), provider NOT registered");
     return;
   }
-  console.log("[dsh-search] registering provider dsh-search");
   const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
-  console.log("[dsh-search] provider registered OK");
+  let effective = "";
   try {
-    if (!ctx.web.searchProviderId) {
-      ctx.web.searchProviderId = "dsh-search";
-    }
+    if (!ctx.web.searchProviderId) ctx.web.searchProviderId = "dsh-search";
+    effective = String(ctx.web.searchProviderId ?? "");
   } catch {
+  }
+  if (effective === "dsh-search") {
+    console.log("[dsh-search] provider registered OK (web_search -> dsh-search)");
+  } else {
+    console.warn('[dsh-search] provider registered, but web_search routes to "' + (effective || "unknown") + '" instead of the free local chain (bing/ddg/searxng); platform_search still uses it');
   }
   try {
     if (typeof ctx.onDispose === "function") {
