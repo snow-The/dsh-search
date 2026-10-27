@@ -2789,22 +2789,43 @@ function registerPlatformSearchTool(ctx, cfg) {
     }
   }));
 }
+function effectiveSearchProvider(web) {
+  try {
+    const ref = web?.config?.searchProvider;
+    const v = typeof ref?.get === "function" ? ref.get() : ref;
+    if (v) return String(v);
+  } catch {
+  }
+  try {
+    if (web?.searchProviderId) return String(web.searchProviderId);
+  } catch {
+  }
+  return String(process.env.DSH_WEB_SEARCH_PROVIDER ?? "");
+}
 function registerWebProvider(ctx, cfg) {
   if (!ctx.web || typeof ctx.web.registerSearchProvider !== "function") {
     console.warn("[dsh-search] ctx.web.registerSearchProvider unavailable (ctx.web=" + !!ctx.web + "), provider NOT registered");
     return;
   }
   const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
-  let effective = "";
+  let hasConfigRef = false;
   try {
-    if (!ctx.web.searchProviderId) ctx.web.searchProviderId = "dsh-search";
-    effective = String(ctx.web.searchProviderId ?? "");
+    hasConfigRef = typeof ctx.web?.config?.searchProvider?.get === "function";
   } catch {
   }
-  if (effective === "dsh-search") {
+  if (!hasConfigRef) {
+    try {
+      if (!ctx.web.searchProviderId) ctx.web.searchProviderId = "dsh-search";
+    } catch {
+    }
+  }
+  const effective = effectiveSearchProvider(ctx.web);
+  if (!effective) {
+    console.log("[dsh-search] provider registered OK (web_search -> dsh-search by default)");
+  } else if (effective === "dsh-search") {
     console.log("[dsh-search] provider registered OK (web_search -> dsh-search)");
   } else {
-    console.warn('[dsh-search] provider registered, but web_search routes to "' + (effective || "unknown") + '" instead of the free local chain (bing/ddg/searxng); platform_search still uses it');
+    console.warn('[dsh-search] provider registered, but web_search routes to "' + effective + '" instead of the free local chain (bing/ddg/searxng); platform_search still uses it');
   }
   try {
     if (typeof ctx.onDispose === "function") {

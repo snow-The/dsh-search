@@ -535,6 +535,27 @@ export function registerPlatformSearchTool(ctx: any, cfg: () => SearchConfig): v
     }}));
 }
 
+/**
+ * 真正生效的搜索后端。
+ *
+ * rc.2+ 的 `WebRuntime.search()` 每次调用都取 `this.config.searchProvider.get()`
+ * （未配置时再用 `DSH_WEB_SEARCH_PROVIDER`），未配置则解析到唯一注册的 provider；
+ * 那个私有字段 `searchProviderId` 只是 pre-rc.2 的形态。
+ *
+ * 所以要报告「实际是谁」必须读 config 引用，否则读到的是个不参与选择的残影。
+ */
+function effectiveSearchProvider(web: any): string {
+  try {
+    const ref = web?.config?.searchProvider;
+    const v = typeof ref?.get === 'function' ? ref.get() : ref;
+    if (v) return String(v);
+  } catch { /* config 不可读 */ }
+  try {
+    if (web?.searchProviderId) return String(web.searchProviderId);
+  } catch { /* noop */ }
+  return String(process.env.DSH_WEB_SEARCH_PROVIDER ?? '');
+}
+
 /** Register the ctx.web search provider; takes over when none configured. */
 export function registerWebProvider(ctx: any, cfg: () => SearchConfig): void {
   // 姿势对齐 dsh-free-search / dsh-web-search-deepseek：apply 时直接注册，
@@ -547,24 +568,39 @@ export function registerWebProvider(ctx: any, cfg: () => SearchConfig): void {
   }
   const disposer = ctx.web.registerSearchProvider(createWebSearchProvider(cfg));
 
-  // 注册成功 ≠ 生效。web_search 认的是 ctx.web.searchProviderId，它可以被别的插件
-  // 或 patch 层指到别家；而本插件的 platform_search 走自己的免费链（bing/ddg/searxng），
-  // 完全不看这个字段。两条路一分岔，症状就是「搜索坏了」：
-  //   2026-10-27 实例 —— 被写成 commandcode，web_search 于是去买对方的搜索额度，
-  //   用完即 400 insufficient credits；同期 platform_search 正常出结果。
+  // 只在 pre-rc.2 的引擎上写内存字段。
   //
-  // 所以这里必须回读并说明「实际生效的是谁」，指到别家时告警 —— 不能让配置静默夺走路由。
-  let effective = '';
-  try {
-    if (!ctx.web.searchProviderId) ctx.web.searchProviderId = 'dsh-search';
-    effective = String(ctx.web.searchProviderId ?? '');
-  } catch { /* 该版本不支持运行期覆盖；回读失败就按未知处理 */ }
+  // rc.2+ 的后端选择是 `config.searchProvider` 这个引用：直接写内存「能生效，但不落
+  // profile —— 那个条目下一次 commit（哪怕只是改 fetchProvider）就会重新解析原始配置
+  // 覆盖掉」（dsh-commandcode-provider 的 seam 文档原话）。写它是假动作，甚至会掩盖
+  // 真正的选择来源。
+  let hasConfigRef = false;
+  try { hasConfigRef = typeof ctx.web?.config?.searchProvider?.get === 'function'; } catch { /* noop */ }
+  if (!hasConfigRef) {
+    try {
+      if (!ctx.web.searchProviderId) ctx.web.searchProviderId = 'dsh-search';
+    } catch { /* 该版本不支持运行期覆盖 */ }
+  }
 
-  // 启动期只留一行 info（约定 ④）。
-  if (effective === 'dsh-search') {
+  // 注册成功 ≠ 生效：config 可以被别的插件或补丁层指到别家，而本插件的
+  // platform_search 走自己的免费链（bing/ddg/searxng），完全不看那个字段。
+  // 两条路一分岔，症状就是「搜索坏了」：
+  //   2026-10-27 实例 —— searchProvider 被写成 commandcode，web_search 于是去买对方
+  //   的搜索额度，用完即 400 insufficient credits；同期 platform_search 一切正常。
+  //
+  // 这个字段能被两处改写：本插件的 config（searchProvider）与 commandcode 插件的
+  // `webSearch` 开关（默认 true）。后者会把自家 provider 选上 —— 用中转站时「默认被
+  // 填成 commandcode」就是它干的。它判断的依据是 settings 行的 user 成员
+  // （`row.user.searchProvider`），不是 patch 层；没有 user 行时，它把 base 当作
+  // 部署默认值并接管。要挡住它，是在该插件条目上写 `webSearch: false`。
+  const effective = effectiveSearchProvider(ctx.web);
+  if (!effective) {
+    // 未配置时运行期解析到唯一注册的 provider，也就是我们自己。
+    console.log('[dsh-search] provider registered OK (web_search -> dsh-search by default)');
+  } else if (effective === 'dsh-search') {
     console.log('[dsh-search] provider registered OK (web_search -> dsh-search)');
   } else {
-    console.warn('[dsh-search] provider registered, but web_search routes to "' + (effective || 'unknown') + '" instead of the free local chain (bing/ddg/searxng); platform_search still uses it');
+    console.warn('[dsh-search] provider registered, but web_search routes to "' + effective + '" instead of the free local chain (bing/ddg/searxng); platform_search still uses it');
   }
   try {
     if (typeof ctx.onDispose === 'function') {
