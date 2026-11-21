@@ -2,3 +2,8 @@ node_modules/
 # dist/ is COMMITTED on purpose: a git-hosted install must work without running a build
 *.log
 .test-build/
+
+# 備份檔：*.bak-* 是手動改動前的副本，不是產物也不是原始碼。
+# 2026-11-21 加：它們讓 audit-publish-state 一直報「local work」，那是假訊號。
+*.bak-*
+*.bak
