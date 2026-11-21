@@ -122,20 +122,78 @@ async function fetchText(url: string, signal?: AbortSignal, headers: Record<stri
   }
 }
 
+/**
+ * Raised by fetchHtmlWithRetry when the body is a refusal page. It carries only the reason;
+ * the engine name is attached by the caller, which is the layer that knows it.
+ */
+class RefusalDetected extends Error {
+  readonly why: string;
+  constructor(why: string) {
+    super('BLOCKED — ' + why);
+    this.name = 'RefusalDetected';
+    this.why = why;
+  }
+}
+
 async function fetchHtmlWithRetry(url: string, signal?: AbortSignal): Promise<string> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const html = await fetchText(url, signal);
+      // A refusal page is often SHORT — the measured DDG CAPTCHA body was 108 bytes. The
+      // size check below would discard it as "empty response" and the caller would never
+      // learn the host was refused. Refusal is checked first, and it is not retried:
+      // a bot wall does not go away because you asked again.
+      const refusal = detectRefusal(html);
+      if (refusal) throw new RefusalDetected(refusal);
       if (html.length > 500) return html;
       lastError = new Error('empty response (' + html.length + ' bytes)');
     } catch (e) {
+      if (e instanceof RefusalDetected) throw e;
       lastError = e;
     }
     if (attempt < 3) await new Promise((r) => setTimeout(r, 1500));
   }
   throw lastError ?? new Error('fetch failed');
 }
+
+/**
+ * A refusal is not an empty result set.
+ *
+ * Measured on this machine: DuckDuckGo answered HTTP 202 with a page whose visible text
+ * was "Unfortunately, bots use DuckDuckGo too... Select all squares containing a duck",
+ * and its challenge URL carried `cc=botnet`. That page parses to zero results, so the
+ * chain recorded "ddg: 0 results" — indistinguishable from a query that genuinely has no
+ * answers. The caller then saw a fallback engine's junk and called it "bad search quality".
+ *
+ * Detecting the refusal is what makes a service change visible: BLOCKED means "this host
+ * is not allowed to ask", EMPTY means "the answer is nothing". They need different fixes.
+ */
+const REFUSAL_MARKERS: { re: RegExp; why: string }[] = [
+  { re: /cc=botnet|Select all squares containing a duck/i, why: 'bot challenge (DDG botnet CAPTCHA)' },
+  { re: /anubis_challenge/i, why: 'proof-of-work challenge (Anubis)' },
+  { re: /unusual traffic|verify you are human|are you a robot/i, why: 'CAPTCHA wall' },
+  { re: /<title>\s*(?:429|403|Access Denied|Forbidden)/i, why: 'access denied page' },
+];
+
+export function detectRefusal(html: string): string | null {
+  const s = String(html);
+  for (const m of REFUSAL_MARKERS) if (m.re.test(s)) return m.why;
+  return null;
+}
+
+/** Thrown when an engine answered with a refusal page instead of results. */
+export class EngineBlockedError extends Error {
+  readonly engine: string;
+  readonly why: string;
+  constructor(engine: string, why: string) {
+    super(engine + ': BLOCKED — ' + why);
+    this.name = 'EngineBlockedError';
+    this.engine = engine;
+    this.why = why;
+  }
+}
+
 
 function approximateTimeRange(days: number): 'day' | 'week' | 'month' | 'year' {
   if (days <= 2) return 'day';
@@ -174,6 +232,8 @@ async function searchBing(query: string, maxResults: number, cfg: SearchConfig, 
   else if (adlt === 'moderate') params.set('adlt', 'moderate');
   else params.set('adlt', 'strict');
   const html = await fetchHtmlWithRetry(BING_URL + '?' + params, signal);
+  const blocked = detectRefusal(html);
+  if (blocked) throw new EngineBlockedError('bing', blocked);
   const blocks = html.match(/<li class="b_algo"[\s\S]*?<\/li>/g) ?? [];
   const sources: SearchHit[] = [];
   for (const block of blocks) {
@@ -199,6 +259,8 @@ async function searchDdgHtml(query: string, maxResults: number, cfg: SearchConfi
     if (df) params.set('df', df);
   }
   const html = await fetchHtmlWithRetry(DDG_HTML_URL + '?' + params, signal);
+  const blocked = detectRefusal(html);
+  if (blocked) throw new EngineBlockedError('ddg', blocked);
   const blocks = html.match(/<div class="result results_links[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/g) ?? [];
   const sources: SearchHit[] = [];
   for (const block of blocks) {
@@ -226,6 +288,8 @@ async function searchDdgLite(query: string, maxResults: number, cfg: SearchConfi
     if (df) params.set('df', df);
   }
   const html = await fetchHtmlWithRetry(DDG_LITE_URL + '?' + params, signal);
+  const blocked = detectRefusal(html);
+  if (blocked) throw new EngineBlockedError('ddg-lite', blocked);
   const linkMatches = html.match(/<a[^>]*class=['"]result-link['"][^>]*>[\s\S]*?<\/a>/g) ?? [];
   const snippetMatches = html.match(/class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/g) ?? [];
   const sources: SearchHit[] = [];
@@ -247,48 +311,70 @@ async function searchDdgLite(query: string, maxResults: number, cfg: SearchConfi
 
 async function searchSearxng(query: string, maxResults: number, cfg: SearchConfig, signal?: AbortSignal, timeRange?: { days?: number }): Promise<SearchHit[]> {
   const instances = cfg.searxngInstances?.length ? cfg.searxngInstances : SEARXNG_INSTANCES;
-  const errors: string[] = [];
-  for (const base of instances) {
+  // Instances are asked CONCURRENTLY. Serially, nine dead instances cost 9 x 8s = 72s before
+  // the engine admitted failure — measured as the dominant term in a 63s chain. Concurrently
+  // the same nine cost one 8s timeout. Priority is preserved: the first instance in the list
+  // that returns results wins, not the fastest one to answer.
+  const params = new URLSearchParams({ q: query, format: 'json' });
+  if (timeRange?.days != null) {
+    const tr = { day: 'day', week: 'week', month: 'month', year: 'year' }[approximateTimeRange(timeRange.days)];
+    if (tr) params.set('time_range', tr);
+  }
+
+  const inner = new AbortController();
+  const onOuterAbort = () => inner.abort();
+  signal?.addEventListener('abort', onOuterAbort);
+
+  const ask = async (base: string): Promise<{ base: string; hits?: SearchHit[]; err?: string }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const onInnerAbort = () => controller.abort();
+    inner.signal.addEventListener('abort', onInnerAbort);
     try {
-      const params = new URLSearchParams({ q: query, format: 'json' });
-      if (timeRange?.days != null) {
-        const tr = { day: 'day', week: 'week', month: 'month', year: 'year' }[approximateTimeRange(timeRange.days)];
-        if (tr) params.set('time_range', tr);
-      }
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
-      const onAbort = () => controller.abort();
-      signal?.addEventListener('abort', onAbort);
-      let response: Response;
-      try {
-        response = await fetch(base + '/search?' + params, {
-          headers: { 'user-agent': USER_AGENT, accept: 'application/json' },
-          signal: controller.signal});
-      } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', onAbort);
-      }
-      if (!response.ok) {
-        errors.push(base + ': HTTP ' + response.status);
-        continue;
-      }
+      const response = await fetch(base + '/search?' + params, {
+        headers: { 'user-agent': USER_AGENT, accept: 'application/json' },
+        signal: controller.signal});
+      if (!response.ok) return { base, err: 'HTTP ' + response.status };
       const data = (await response.json().catch(() => null)) as { results?: { url?: string; title?: string; content?: string }[] } | null;
-      if (!data || !Array.isArray(data.results)) {
-        errors.push(base + ': invalid JSON');
-        continue;
-      }
-      const sources = data.results
+      if (!data || !Array.isArray(data.results)) return { base, err: 'invalid JSON' };
+      const hits = data.results
         .filter((r) => r.url)
         .map((r) => ({
           url: r.url!,
           ...(r.title ? { title: String(r.title) } : {}),
           ...(r.content ? { snippet: String(r.content) } : {})}));
-      if (sources.length > 0) return uniqueSources(sources, maxResults);
-      errors.push(base + ': 0 results');
+      return hits.length > 0 ? { base, hits } : { base, err: '0 results' };
     } catch (e) {
-      errors.push(base + ': ' + (e instanceof Error ? e.message : String(e)));
+      return { base, err: e instanceof Error ? e.message : String(e) };
+    } finally {
+      clearTimeout(timer);
+      inner.signal.removeEventListener('abort', onInnerAbort);
     }
-  }
+  };
+
+  const settled = new Array<{ base: string; hits?: SearchHit[]; err?: string } | undefined>(instances.length).fill(undefined);
+  let pending = instances.length;
+  const winner = await new Promise<{ index: number; hits: SearchHit[] } | null>((resolve) => {
+    let done = false;
+    const check = () => {
+      if (done) return;
+      for (let i = 0; i < instances.length; i += 1) {
+        const s = settled[i];
+        if (s === undefined) return; // a higher-priority instance is still in flight
+        if (s.hits) { done = true; resolve({ index: i, hits: s.hits }); return; }
+      }
+      if (pending === 0) { done = true; resolve(null); }
+    };
+    instances.forEach((base, i) => {
+      ask(base).then((s) => { settled[i] = s; pending -= 1; check(); });
+    });
+  });
+
+  inner.abort();
+  signal?.removeEventListener('abort', onOuterAbort);
+
+  if (winner) return uniqueSources(winner.hits, maxResults);
+  const errors = settled.filter(Boolean).map((s) => s!.base + ': ' + (s!.err ?? 'unknown'));
   throw new Error('searxng: all instances failed — ' + errors.join(' | '));
 }
 
@@ -388,13 +474,43 @@ export function isNavigational(url: string): boolean {
   try { const u = new URL(String(url)); return u.pathname === '/' || u.pathname === ''; } catch { return false; }
 }
 
+/**
+ * CJK has no spaces, so the latin tokenizer below yields ZERO tokens for a Chinese query
+ * and the guard returned false before looking at a single hit — the off-topic check was
+ * silently disabled for every CJK query. Measured: "爬蟲 原理" -> 0 tokens, and the
+ * results were a WPS pricing page and a Sogou IME download page.
+ *
+ * Overlapping bigrams are the standard cheap fix: "網路爬蟲" -> 網路, 路爬, 爬蟲. A hit
+ * that shares no bigram with the query is about something else. Single-character queries
+ * are left unjudged (one char is not evidence of a topic).
+ */
+function cjkBigrams(text: string): string[] {
+  const out: string[] = [];
+  // CJK Unified Ideographs + Extension A + compatibility, plus kana/hangul ranges that
+  // also lack spaces. Anything outside these ranges is handled by the latin tokenizer.
+  const runs = String(text).match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+/g) ?? [];
+  for (const run of runs) {
+    const chars = [...run];
+    if (chars.length === 1) continue;
+    for (let i = 0; i + 1 < chars.length; i += 1) out.push(chars[i] + chars[i + 1]);
+  }
+  return out;
+}
+
 export function looksOffTopic(query: string, hits: SearchHit[]): boolean {
-  const tokens = (String(query).toLowerCase().match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
-  if (tokens.length === 0) return false;
+  const q = String(query).toLowerCase();
+  const tokens = (q.match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
+  const bigrams = cjkBigrams(q);
+  // Nothing to match on in either script: the query carries no judgeable content.
+  if (tokens.length === 0 && bigrams.length === 0) return false;
   const hay = (h: SearchHit) => ((h.title ?? '') + ' ' + (h.snippet ?? '') + ' ' + (h.url ?? '')).toLowerCase();
   const all = hits.map(hay).join(' ');
   const matched = tokens.filter((t) => all.includes(t));
-  if (matched.length === 0) return true;
+  const matchedBigrams = bigrams.filter((b) => all.includes(b));
+  // A CJK query is judged on bigrams when it has them; a mixed query must satisfy the
+  // latin half too, because that half is usually the distinctive token ("dsh-search 插件").
+  if (tokens.length > 0 && matched.length === 0) return true;
+  if (bigrams.length > 0 && matchedBigrams.length === 0) return true;
   // Matching ONLY the ubiquitous word is not evidence of relevance. A query about "when to compact
   // agent context" came back as pages titled "什么是 arXiv" and "arXiv - 维基百科": every one of them
   // matched the single token "arxiv" and nothing else, so the old rule passed them as on-topic.
@@ -422,6 +538,48 @@ function engineChain(preferred: string | undefined): string[] {
 }
 
 /**
+ * The settled result of asking ONE engine. Every failure mode is a distinct variant because
+ * they need different responses: BLOCKED means the host is refused (retrying is pointless),
+ * EMPTY means the query has no answers, OFFTOPIC means the engine answered a different
+ * question, ERROR means the transport broke.
+ */
+type ChainOutcome =
+  | { kind: 'hit'; id: string; sources: SearchHit[] }
+  | { kind: 'offtopic'; id: string; sources: SearchHit[] }
+  | { kind: 'empty'; id: string }
+  | { kind: 'blocked'; id: string; why: string }
+  | { kind: 'error'; id: string; msg: string };
+
+/** Ask one engine and classify the answer. Never throws: a failure is a value. */
+async function runOneEngine(
+  id: string,
+  query: string,
+  maxResults: number,
+  cfg: SearchConfig,
+  signal: AbortSignal | undefined,
+  tr: { days?: number } | undefined,
+): Promise<ChainOutcome> {
+  try {
+    let sources: SearchHit[];
+    if (KEYED_ENGINES[id]) {
+      if (!keyedEngineAvailable(id)) return { kind: 'error', id, msg: 'missing ' + KEYED_ENGINES[id].keyEnv };
+      sources = await KEYED_ENGINES[id].fn(query, maxResults, cfg, signal, tr);
+    } else {
+      sources = await FREE_ENGINES[id](query, maxResults, cfg, signal, tr);
+    }
+    if (sources.length === 0) return { kind: 'empty', id };
+    if (looksOffTopic(query, sources)) return { kind: 'offtopic', id, sources };
+    return { kind: 'hit', id, sources };
+  } catch (e) {
+    // fetchHtmlWithRetry raises RefusalDetected without an engine name (it does not know
+    // which engine called it); attach the name here, where it is known.
+    if (e instanceof RefusalDetected) return { kind: 'blocked', id, why: e.why };
+    if (e instanceof EngineBlockedError) return { kind: 'blocked', id, why: e.why };
+    return { kind: 'error', id, msg: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
  * Run one search with fallback chain. Returns normalized result + which engine served it.
  */
 export async function runSearchChain(req: SearchRequest, cfg: SearchConfig, signal?: AbortSignal): Promise<WebSearchOut> {
@@ -445,36 +603,76 @@ export async function runSearchChain(req: SearchRequest, cfg: SearchConfig, sign
   }
 
   const chain = engineChain(preferred);
+  // All engines are asked at once. Selection still follows the priority order EXACTLY: the
+  // first engine in `chain` that returns an on-topic set wins, and a lower-priority answer
+  // is never preferred just because it arrived sooner. What changes is the wall time when
+  // several engines fail — they fail together instead of one after another.
+  //
+  // Measured 2026-11-16 on a throttled host: the serial chain took 63s because four engines
+  // each burned their own timeout in turn. The same four failing concurrently cost one
+  // timeout. On a healthy host the preferred engine answers in <1s and this returns at once,
+  // so the common case does not regress.
+  const inner = new AbortController();
+  const onOuterAbort = () => inner.abort();
+  signal?.addEventListener('abort', onOuterAbort);
+
+  const outcomes = new Array<ChainOutcome | undefined>(chain.length).fill(undefined);
+  let pending = chain.length;
+  let decided = false;
+
+  const decision = new Promise<{ index: number; outcome: ChainOutcome } | null>((resolve) => {
+    const check = () => {
+      if (decided) return;
+      for (let j = 0; j < chain.length; j += 1) {
+        const o = outcomes[j];
+        // A higher-priority engine is still running: its answer would outrank anything
+        // below it, so nothing can be decided yet.
+        if (o === undefined) return;
+        if (o.kind === 'hit') { decided = true; resolve({ index: j, outcome: o }); return; }
+      }
+      if (pending === 0) { decided = true; resolve(null); }
+    };
+    chain.forEach((id, i) => {
+      runOneEngine(id, query, maxResults, cfg, inner.signal, tr ?? undefined).then((o) => {
+        outcomes[i] = o;
+        pending -= 1;
+        check();
+      });
+    });
+  });
+
+  const won = await decision;
+  // Stop the engines we no longer need. Once an answer is chosen the rest are wasted
+  // requests, and on a rate-limited host wasted requests make the NEXT call worse.
+  inner.abort();
+  signal?.removeEventListener('abort', onOuterAbort);
+
   const errors: string[] = [];
-  // Best of the rejected sets: returning nothing is worse than returning something labelled.
+  let blockedCount = 0;
   let offTopicBest: { id: string; sources: SearchHit[] } | null = null;
-  for (const id of chain) {
-    try {
-      let sources: SearchHit[];
-      if (KEYED_ENGINES[id]) {
-        if (!keyedEngineAvailable(id)) { errors.push(id + ': missing ' + KEYED_ENGINES[id].keyEnv); continue; }
-        sources = await KEYED_ENGINES[id].fn(query, maxResults, cfg, signal, tr ?? undefined);
-      } else {
-        sources = await FREE_ENGINES[id](query, maxResults, cfg, signal, tr ?? undefined);
-      }
-      if (sources.length === 0) { errors.push(id + ': 0 results'); continue; }
-      if (looksOffTopic(query, sources)) {
-        errors.push(id + ': ' + sources.length + ' results share no query token (off-topic)');
-        if (offTopicBest == null) offTopicBest = { id, sources };
-        continue;
-      }
-      const out: WebSearchOut = {
-        sources,
-        engine: id,
-        note: id === preferred || !preferred ? undefined : 'preferred "' + preferred + '" failed, fell back to "' + id + '"' + (errors.length ? ' (' + errors.join('; ') + ')' : '')};
-      if (key) {
-        // fallback hits get 1/5 TTL so the preferred engine recovers quickly
-        cacheSet(key, out, id === preferred || !preferred ? cacheTtlMs : Math.max(Math.round(cacheTtlMs / 5), 1000));
-      }
-      return out;
-    } catch (e) {
-      errors.push(id + ': ' + (e instanceof Error ? e.message : String(e)));
+  for (let i = 0; i < chain.length; i += 1) {
+    const o = outcomes[i];
+    if (o === undefined) continue; // aborted before it settled; not evidence of anything
+    if (o.kind === 'blocked') { blockedCount += 1; errors.push(o.id + ': BLOCKED — ' + o.why); }
+    else if (o.kind === 'empty') errors.push(o.id + ': 0 results');
+    else if (o.kind === 'error') errors.push(o.id + ': ' + o.msg);
+    else if (o.kind === 'offtopic') {
+      errors.push(o.id + ': ' + o.sources.length + ' results share no query token (off-topic)');
+      if (offTopicBest == null) offTopicBest = { id: o.id, sources: o.sources };
     }
+  }
+
+  if (won != null && won.outcome.kind === 'hit') {
+    const id = won.outcome.id;
+    const out: WebSearchOut = {
+      sources: won.outcome.sources,
+      engine: id,
+      note: id === preferred || !preferred ? undefined : 'preferred "' + preferred + '" failed, fell back to "' + id + '"' + (errors.length ? ' (' + errors.join('; ') + ')' : '')};
+    if (key) {
+      // fallback hits get 1/5 TTL so the preferred engine recovers quickly
+      cacheSet(key, out, id === preferred || !preferred ? cacheTtlMs : Math.max(Math.round(cacheTtlMs / 5), 1000));
+    }
+    return out;
   }
   if (offTopicBest != null) {
     const best: WebSearchOut = {
@@ -485,7 +683,12 @@ export async function runSearchChain(req: SearchRequest, cfg: SearchConfig, sign
     if (key) cacheSet(key, best, Math.max(Math.round(cacheTtlMs / 5), 1000));
     return best;
   }
-  throw new Error('all search engines failed: ' + errors.join(' | '));
+  // Name the dominant cause. "all engines failed" hides the difference between a blocked
+  // host and a query with no answers, and those need different responses from the caller.
+  const cause = blockedCount > 0
+    ? blockedCount + ' of ' + chain.length + ' engines BLOCKED this host (refusal page, not an empty result)'
+    : 'no engine returned results';
+  throw new Error('all search engines failed — ' + cause + ': ' + errors.join(' | '));
 }
 
 /**

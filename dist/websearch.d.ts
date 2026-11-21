@@ -31,6 +31,13 @@ export interface SearchConfig {
     cache?: boolean;
     cacheTtl?: number;
 }
+export declare function detectRefusal(html: string): string | null;
+/** Thrown when an engine answered with a refusal page instead of results. */
+export declare class EngineBlockedError extends Error {
+    readonly engine: string;
+    readonly why: string;
+    constructor(engine: string, why: string);
+}
 /**
  * A result set that shares NO token with the query is answering a different question.
  * This is the "results from another context" failure: the engine's parser returns the

@@ -15,11 +15,18 @@ import { hubSearch, type HubKind } from './hubs.js';
 import { openSourceSearch, OPEN_SOURCES, type OpenSourceId } from './opensources.js';
 import { maybeStartServer, daemonConfigIssue } from './server.js';
 import { registerWebProvider, registerPlatformSearchTool, type SearchConfig } from './websearch.js';
+import { verifyMany, summarize } from './verify.js';
 
 const textOut = { schema: { type: 'string' }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: String(v) }] };
 
 export const name = 'dsh-search';
 export const inject = ['tools', 'web'];
+
+// Re-exported so the COMPILED bundle can be tested directly. Editing src/ does not change
+// what the host loads — dist/index.js is the artifact the profile imports, and a fix that
+// never reached it is a fix that never ran. Measured 2026-11-16: dist was 132,970 B and
+// contained none of the CJK-guard symbols while src/ did.
+export { looksOffTopic, detectRefusal, EngineBlockedError, runSearchChain } from './websearch.js';
 
 export async function apply(ctx: any) {
   // 启动不再打「apply called + 值 dump」：失败路径 registerWebProvider 自己会 warn
@@ -90,6 +97,42 @@ export async function apply(ctx: any) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = extractText(await res.text());
       return 'URL: ' + url + '\nchars: ' + text.length + '\n\n' + text;
+    }}));
+
+  // --- search_verify ---
+  // A source is a claim, not a fact. web_search returns citeable URLs; this says whether
+  // each one is worth citing: reachable, redirected, behind a login, a content mill, or a
+  // primary source. It is the check the user asked for after "搜尋插件都是垃圾結果".
+  ctx.tools.register(defineTool({
+    name: 'search_verify',
+    description: 'Verify search-result URLs before citing them: HTTP status, redirect target, content kind, login wall (401/403), content-mill domain, primary-source domain. Never throws — an unreachable link is a result. Use after web_search/platform_search to drop dead and farm links; set read:true to also keep a bounded title/excerpt.',
+    parameters: {
+      urls: { type: 'string', required: true, description: 'URLs to verify, comma- or newline-separated (or a JSON array)' },
+      read: { type: 'boolean', description: 'also keep a bounded title/excerpt per page (default false)' },
+      timeoutMs: { type: 'number', description: 'per-URL timeout in ms (default 12000)' },
+      maxChars: { type: 'number', description: 'max excerpt chars when read is true (default 2000)' }},
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_a: unknown, v: unknown) => [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    timeoutMs: 120000,
+    async execute(args: any) {
+      // Accept a JSON array, a comma list, or newlines: the caller may paste either.
+      const raw = args?.urls;
+      let urls: string[] = [];
+      if (Array.isArray(raw)) urls = raw.map(String);
+      else if (typeof raw === 'string') {
+        const s = raw.trim();
+        if (s.startsWith('[')) {
+          try { urls = (JSON.parse(s) as unknown[]).map(String); } catch { urls = s.split(/[\s,]+/); }
+        } else {
+          urls = s.split(/[\s,]+/);
+        }
+      }
+      urls = urls.map((u) => u.trim()).filter(Boolean);
+      if (urls.length === 0) throw new Error('urls is required');
+      const links = await verifyMany(urls, {
+        read: args?.read === true,
+        timeoutMs: Number(args?.timeoutMs) || 12000,
+        maxChars: Number(args?.maxChars) || 2000});
+      return { summary: summarize(links), links };
     }}));
 
   // --- search_github ---

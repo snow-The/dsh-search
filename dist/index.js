@@ -2415,20 +2415,52 @@ async function fetchText(url, signal, headers = {}) {
     signal?.removeEventListener("abort", onAbort);
   }
 }
+var RefusalDetected = class extends Error {
+  why;
+  constructor(why) {
+    super("BLOCKED \u2014 " + why);
+    this.name = "RefusalDetected";
+    this.why = why;
+  }
+};
 async function fetchHtmlWithRetry(url, signal) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const html = await fetchText(url, signal);
+      const refusal = detectRefusal(html);
+      if (refusal) throw new RefusalDetected(refusal);
       if (html.length > 500) return html;
       lastError = new Error("empty response (" + html.length + " bytes)");
     } catch (e) {
+      if (e instanceof RefusalDetected) throw e;
       lastError = e;
     }
     if (attempt < 3) await new Promise((r) => setTimeout(r, 1500));
   }
   throw lastError ?? new Error("fetch failed");
 }
+var REFUSAL_MARKERS = [
+  { re: /cc=botnet|Select all squares containing a duck/i, why: "bot challenge (DDG botnet CAPTCHA)" },
+  { re: /anubis_challenge/i, why: "proof-of-work challenge (Anubis)" },
+  { re: /unusual traffic|verify you are human|are you a robot/i, why: "CAPTCHA wall" },
+  { re: /<title>\s*(?:429|403|Access Denied|Forbidden)/i, why: "access denied page" }
+];
+function detectRefusal(html) {
+  const s = String(html);
+  for (const m of REFUSAL_MARKERS) if (m.re.test(s)) return m.why;
+  return null;
+}
+var EngineBlockedError = class extends Error {
+  engine;
+  why;
+  constructor(engine, why) {
+    super(engine + ": BLOCKED \u2014 " + why);
+    this.name = "EngineBlockedError";
+    this.engine = engine;
+    this.why = why;
+  }
+};
 function approximateTimeRange(days) {
   if (days <= 2) return "day";
   if (days <= 14) return "week";
@@ -2463,6 +2495,8 @@ async function searchBing(query, maxResults, cfg, signal) {
   else if (adlt === "moderate") params.set("adlt", "moderate");
   else params.set("adlt", "strict");
   const html = await fetchHtmlWithRetry(BING_URL + "?" + params, signal);
+  const blocked = detectRefusal(html);
+  if (blocked) throw new EngineBlockedError("bing", blocked);
   const blocks = html.match(/<li class="b_algo"[\s\S]*?<\/li>/g) ?? [];
   const sources = [];
   for (const block of blocks) {
@@ -2488,6 +2522,8 @@ async function searchDdgHtml(query, maxResults, cfg, signal, timeRange) {
     if (df) params.set("df", df);
   }
   const html = await fetchHtmlWithRetry(DDG_HTML_URL + "?" + params, signal);
+  const blocked = detectRefusal(html);
+  if (blocked) throw new EngineBlockedError("ddg", blocked);
   const blocks = html.match(/<div class="result results_links[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/g) ?? [];
   const sources = [];
   for (const block of blocks) {
@@ -2515,6 +2551,8 @@ async function searchDdgLite(query, maxResults, cfg, signal, timeRange) {
     if (df) params.set("df", df);
   }
   const html = await fetchHtmlWithRetry(DDG_LITE_URL + "?" + params, signal);
+  const blocked = detectRefusal(html);
+  if (blocked) throw new EngineBlockedError("ddg-lite", blocked);
   const linkMatches = html.match(/<a[^>]*class=['"]result-link['"][^>]*>[\s\S]*?<\/a>/g) ?? [];
   const snippetMatches = html.match(/class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/g) ?? [];
   const sources = [];
@@ -2536,48 +2574,72 @@ async function searchDdgLite(query, maxResults, cfg, signal, timeRange) {
 }
 async function searchSearxng(query, maxResults, cfg, signal, timeRange) {
   const instances = cfg.searxngInstances?.length ? cfg.searxngInstances : SEARXNG_INSTANCES;
-  const errors = [];
-  for (const base of instances) {
+  const params = new URLSearchParams({ q: query, format: "json" });
+  if (timeRange?.days != null) {
+    const tr = { day: "day", week: "week", month: "month", year: "year" }[approximateTimeRange(timeRange.days)];
+    if (tr) params.set("time_range", tr);
+  }
+  const inner = new AbortController();
+  const onOuterAbort = () => inner.abort();
+  signal?.addEventListener("abort", onOuterAbort);
+  const ask = async (base) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8e3);
+    const onInnerAbort = () => controller.abort();
+    inner.signal.addEventListener("abort", onInnerAbort);
     try {
-      const params = new URLSearchParams({ q: query, format: "json" });
-      if (timeRange?.days != null) {
-        const tr = { day: "day", week: "week", month: "month", year: "year" }[approximateTimeRange(timeRange.days)];
-        if (tr) params.set("time_range", tr);
-      }
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8e3);
-      const onAbort = () => controller.abort();
-      signal?.addEventListener("abort", onAbort);
-      let response;
-      try {
-        response = await fetch(base + "/search?" + params, {
-          headers: { "user-agent": USER_AGENT, accept: "application/json" },
-          signal: controller.signal
-        });
-      } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-      }
-      if (!response.ok) {
-        errors.push(base + ": HTTP " + response.status);
-        continue;
-      }
+      const response = await fetch(base + "/search?" + params, {
+        headers: { "user-agent": USER_AGENT, accept: "application/json" },
+        signal: controller.signal
+      });
+      if (!response.ok) return { base, err: "HTTP " + response.status };
       const data = await response.json().catch(() => null);
-      if (!data || !Array.isArray(data.results)) {
-        errors.push(base + ": invalid JSON");
-        continue;
-      }
-      const sources = data.results.filter((r) => r.url).map((r) => ({
+      if (!data || !Array.isArray(data.results)) return { base, err: "invalid JSON" };
+      const hits = data.results.filter((r) => r.url).map((r) => ({
         url: r.url,
         ...r.title ? { title: String(r.title) } : {},
         ...r.content ? { snippet: String(r.content) } : {}
       }));
-      if (sources.length > 0) return uniqueSources(sources, maxResults);
-      errors.push(base + ": 0 results");
+      return hits.length > 0 ? { base, hits } : { base, err: "0 results" };
     } catch (e) {
-      errors.push(base + ": " + (e instanceof Error ? e.message : String(e)));
+      return { base, err: e instanceof Error ? e.message : String(e) };
+    } finally {
+      clearTimeout(timer);
+      inner.signal.removeEventListener("abort", onInnerAbort);
     }
-  }
+  };
+  const settled = new Array(instances.length).fill(void 0);
+  let pending = instances.length;
+  const winner = await new Promise((resolve) => {
+    let done = false;
+    const check = () => {
+      if (done) return;
+      for (let i = 0; i < instances.length; i += 1) {
+        const s = settled[i];
+        if (s === void 0) return;
+        if (s.hits) {
+          done = true;
+          resolve({ index: i, hits: s.hits });
+          return;
+        }
+      }
+      if (pending === 0) {
+        done = true;
+        resolve(null);
+      }
+    };
+    instances.forEach((base, i) => {
+      ask(base).then((s) => {
+        settled[i] = s;
+        pending -= 1;
+        check();
+      });
+    });
+  });
+  inner.abort();
+  signal?.removeEventListener("abort", onOuterAbort);
+  if (winner) return uniqueSources(winner.hits, maxResults);
+  const errors = settled.filter(Boolean).map((s) => s.base + ": " + (s.err ?? "unknown"));
   throw new Error("searxng: all instances failed \u2014 " + errors.join(" | "));
 }
 async function searchTavily(query, maxResults, apiKey, signal) {
@@ -2658,13 +2720,27 @@ function isNavigational(url) {
     return false;
   }
 }
+function cjkBigrams(text) {
+  const out = [];
+  const runs = String(text).match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]+/g) ?? [];
+  for (const run of runs) {
+    const chars = [...run];
+    if (chars.length === 1) continue;
+    for (let i = 0; i + 1 < chars.length; i += 1) out.push(chars[i] + chars[i + 1]);
+  }
+  return out;
+}
 function looksOffTopic(query, hits) {
-  const tokens = (String(query).toLowerCase().match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
-  if (tokens.length === 0) return false;
+  const q = String(query).toLowerCase();
+  const tokens = (q.match(/[a-z0-9][a-z0-9._-]{2,}/g) ?? []).filter((t) => !STOPWORDS.has(t));
+  const bigrams = cjkBigrams(q);
+  if (tokens.length === 0 && bigrams.length === 0) return false;
   const hay = (h) => ((h.title ?? "") + " " + (h.snippet ?? "") + " " + (h.url ?? "")).toLowerCase();
   const all = hits.map(hay).join(" ");
   const matched = tokens.filter((t) => all.includes(t));
-  if (matched.length === 0) return true;
+  const matchedBigrams = bigrams.filter((b) => all.includes(b));
+  if (tokens.length > 0 && matched.length === 0) return true;
+  if (bigrams.length > 0 && matchedBigrams.length === 0) return true;
   if (tokens.length >= 3 && matched.length === 1 && hits.length > 1) {
     const word = matched[0];
     if (hits.every((h) => hay(h).includes(word))) return true;
@@ -2685,6 +2761,24 @@ function engineChain(preferred) {
   for (const id of Object.keys(FREE_ENGINES)) push(id);
   return order;
 }
+async function runOneEngine(id, query, maxResults, cfg, signal, tr) {
+  try {
+    let sources;
+    if (KEYED_ENGINES[id]) {
+      if (!keyedEngineAvailable(id)) return { kind: "error", id, msg: "missing " + KEYED_ENGINES[id].keyEnv };
+      sources = await KEYED_ENGINES[id].fn(query, maxResults, cfg, signal, tr);
+    } else {
+      sources = await FREE_ENGINES[id](query, maxResults, cfg, signal, tr);
+    }
+    if (sources.length === 0) return { kind: "empty", id };
+    if (looksOffTopic(query, sources)) return { kind: "offtopic", id, sources };
+    return { kind: "hit", id, sources };
+  } catch (e) {
+    if (e instanceof RefusalDetected) return { kind: "blocked", id, why: e.why };
+    if (e instanceof EngineBlockedError) return { kind: "blocked", id, why: e.why };
+    return { kind: "error", id, msg: e instanceof Error ? e.message : String(e) };
+  }
+}
 async function runSearchChain(req, cfg, signal) {
   const query = String(req.query ?? "").trim();
   if (!query) throw new Error("query is required");
@@ -2700,41 +2794,67 @@ async function runSearchChain(req, cfg, signal) {
     if (hit) return { ...hit, note: (hit.note ?? "") + " [cache hit]" };
   }
   const chain = engineChain(preferred);
-  const errors = [];
-  let offTopicBest = null;
-  for (const id of chain) {
-    try {
-      let sources;
-      if (KEYED_ENGINES[id]) {
-        if (!keyedEngineAvailable(id)) {
-          errors.push(id + ": missing " + KEYED_ENGINES[id].keyEnv);
-          continue;
+  const inner = new AbortController();
+  const onOuterAbort = () => inner.abort();
+  signal?.addEventListener("abort", onOuterAbort);
+  const outcomes = new Array(chain.length).fill(void 0);
+  let pending = chain.length;
+  let decided = false;
+  const decision = new Promise((resolve) => {
+    const check = () => {
+      if (decided) return;
+      for (let j = 0; j < chain.length; j += 1) {
+        const o = outcomes[j];
+        if (o === void 0) return;
+        if (o.kind === "hit") {
+          decided = true;
+          resolve({ index: j, outcome: o });
+          return;
         }
-        sources = await KEYED_ENGINES[id].fn(query, maxResults, cfg, signal, tr ?? void 0);
-      } else {
-        sources = await FREE_ENGINES[id](query, maxResults, cfg, signal, tr ?? void 0);
       }
-      if (sources.length === 0) {
-        errors.push(id + ": 0 results");
-        continue;
+      if (pending === 0) {
+        decided = true;
+        resolve(null);
       }
-      if (looksOffTopic(query, sources)) {
-        errors.push(id + ": " + sources.length + " results share no query token (off-topic)");
-        if (offTopicBest == null) offTopicBest = { id, sources };
-        continue;
-      }
-      const out = {
-        sources,
-        engine: id,
-        note: id === preferred || !preferred ? void 0 : 'preferred "' + preferred + '" failed, fell back to "' + id + '"' + (errors.length ? " (" + errors.join("; ") + ")" : "")
-      };
-      if (key) {
-        cacheSet(key, out, id === preferred || !preferred ? cacheTtlMs : Math.max(Math.round(cacheTtlMs / 5), 1e3));
-      }
-      return out;
-    } catch (e) {
-      errors.push(id + ": " + (e instanceof Error ? e.message : String(e)));
+    };
+    chain.forEach((id, i) => {
+      runOneEngine(id, query, maxResults, cfg, inner.signal, tr ?? void 0).then((o) => {
+        outcomes[i] = o;
+        pending -= 1;
+        check();
+      });
+    });
+  });
+  const won = await decision;
+  inner.abort();
+  signal?.removeEventListener("abort", onOuterAbort);
+  const errors = [];
+  let blockedCount = 0;
+  let offTopicBest = null;
+  for (let i = 0; i < chain.length; i += 1) {
+    const o = outcomes[i];
+    if (o === void 0) continue;
+    if (o.kind === "blocked") {
+      blockedCount += 1;
+      errors.push(o.id + ": BLOCKED \u2014 " + o.why);
+    } else if (o.kind === "empty") errors.push(o.id + ": 0 results");
+    else if (o.kind === "error") errors.push(o.id + ": " + o.msg);
+    else if (o.kind === "offtopic") {
+      errors.push(o.id + ": " + o.sources.length + " results share no query token (off-topic)");
+      if (offTopicBest == null) offTopicBest = { id: o.id, sources: o.sources };
     }
+  }
+  if (won != null && won.outcome.kind === "hit") {
+    const id = won.outcome.id;
+    const out = {
+      sources: won.outcome.sources,
+      engine: id,
+      note: id === preferred || !preferred ? void 0 : 'preferred "' + preferred + '" failed, fell back to "' + id + '"' + (errors.length ? " (" + errors.join("; ") + ")" : "")
+    };
+    if (key) {
+      cacheSet(key, out, id === preferred || !preferred ? cacheTtlMs : Math.max(Math.round(cacheTtlMs / 5), 1e3));
+    }
+    return out;
   }
   if (offTopicBest != null) {
     const best = {
@@ -2745,7 +2865,8 @@ async function runSearchChain(req, cfg, signal) {
     if (key) cacheSet(key, best, Math.max(Math.round(cacheTtlMs / 5), 1e3));
     return best;
   }
-  throw new Error("all search engines failed: " + errors.join(" | "));
+  const cause = blockedCount > 0 ? blockedCount + " of " + chain.length + " engines BLOCKED this host (refusal page, not an empty result)" : "no engine returned results";
+  throw new Error("all search engines failed \u2014 " + cause + ": " + errors.join(" | "));
 }
 function createWebSearchProvider(cfg) {
   return {
@@ -2840,6 +2961,165 @@ function registerWebProvider(ctx, cfg) {
   }
 }
 
+// src/verify.ts
+var FARM_DOMAINS = [
+  "csdn.net",
+  "tencent.com",
+  "aliyun.com",
+  "51cto.com",
+  "cnblogs.com",
+  "jianshu.com",
+  "zhihu.com",
+  "juejin.cn",
+  "segmentfault.com",
+  "bilibili.com",
+  "sohu.com",
+  "163.com",
+  "sina.com",
+  "baijiahao.baidu.com",
+  "toutiao.com",
+  "w3cschool.cn",
+  "runoob.com",
+  "yiibai.com",
+  "biancheng.net",
+  "oschina.net",
+  "ppmy.cn"
+];
+var PRIMARY_DOMAINS = [
+  "github.com",
+  "raw.githubusercontent.com",
+  "gitlab.com",
+  "pypi.org",
+  "npmjs.com",
+  "arxiv.org",
+  "developer.mozilla.org",
+  "wikipedia.org",
+  "docs.python.org",
+  "nodejs.org",
+  "readthedocs.io",
+  "crates.io",
+  "huggingface.co",
+  "api-docs.deepseek.com",
+  "deepseek.com"
+];
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+function underDomain(host, domain) {
+  return host === domain || host.endsWith("." + domain);
+}
+function kindOf(contentType) {
+  const ct = contentType.toLowerCase();
+  if (ct.includes("text/html") || ct.includes("application/xhtml")) return "html";
+  if (ct.startsWith("text/") || ct.includes("json") || ct.includes("xml")) return "text";
+  if (ct) return "binary";
+  return "unknown";
+}
+function titleOf(html) {
+  const m = html.match(/<title[^>]*>([\s\S]{0,300}?)<\/title>/i);
+  if (!m) return void 0;
+  return m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+}
+function textOf(html) {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+}
+async function verifyOne(url, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? 12e3;
+  const maxChars = opts.maxChars ?? 2e3;
+  const host = hostOf(url);
+  const base = {
+    url,
+    ok: false,
+    status: 0,
+    finalUrl: url,
+    kind: "unknown",
+    authWall: false,
+    farm: FARM_DOMAINS.some((d) => underDomain(host, d)),
+    primary: PRIMARY_DOMAINS.some((d) => underDomain(host, d)),
+    ms: 0
+  };
+  const t0 = Date.now();
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        // An explicit product agent, not a browser disguise: a site that refuses this
+        // refuses a bot, and pretending otherwise only hides that from the caller.
+        "user-agent": "deepseek-harness/0.0.1 (+https://github.com/deepseek-ai)",
+        accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8"
+      },
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+    base.status = res.status;
+    base.finalUrl = res.url || url;
+    base.kind = kindOf(res.headers.get("content-type") ?? "");
+    base.authWall = res.status === 401 || res.status === 403;
+    base.ok = res.status >= 200 && res.status < 300;
+    if (opts.read && base.ok && (base.kind === "html" || base.kind === "text")) {
+      const HEAD_BYTES = 64 * 1024;
+      const body = (await res.text()).slice(0, Math.max(HEAD_BYTES, maxChars * 4));
+      if (base.kind === "html") {
+        base.title = titleOf(body);
+        base.excerpt = textOf(body).slice(0, maxChars);
+      } else {
+        const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+        if (ct.includes("json")) {
+          try {
+            const j = JSON.parse(body);
+            const named = j.full_name ?? j.name ?? j.title ?? j.id;
+            if (typeof named === "string") base.title = named;
+            base.excerpt = JSON.stringify(j).slice(0, maxChars);
+          } catch {
+            base.excerpt = body.slice(0, maxChars);
+          }
+        } else {
+          base.excerpt = body.slice(0, maxChars);
+        }
+      }
+    } else {
+      await res.arrayBuffer().catch(() => void 0);
+    }
+  } catch (e) {
+    base.error = e instanceof Error ? e.message : String(e);
+  }
+  base.ms = Date.now() - t0;
+  return base;
+}
+async function verifyMany(urls, opts = {}, concurrency = 6) {
+  const unique = [...new Set(urls.filter((u) => /^https?:\/\//i.test(u)))];
+  const out = new Array(unique.length);
+  let next = 0;
+  const worker = async () => {
+    for (; ; ) {
+      const i = next++;
+      if (i >= unique.length) return;
+      out[i] = await verifyOne(unique[i], opts);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, unique.length) }, worker));
+  return out;
+}
+function summarize(links) {
+  const ok = links.filter((l) => l.ok).length;
+  const farm = links.filter((l) => l.farm).length;
+  const primary = links.filter((l) => l.primary).length;
+  return {
+    total: links.length,
+    ok,
+    dead: links.length - ok,
+    authWall: links.filter((l) => l.authWall).length,
+    farm,
+    primary,
+    // No reachable source, or every reachable one is a content mill.
+    unusable: links.length === 0 || ok === 0 || primary === 0 && farm === ok
+  };
+}
+
 // src/index.ts
 var textOut = { schema: { type: "string" }, render: (_a, v) => [{ type: "text", text: String(v) }] };
 var name = "dsh-search";
@@ -2912,6 +3192,43 @@ async function apply(ctx) {
       if (!res.ok) throw new Error("HTTP " + res.status);
       const text = extractText(await res.text());
       return "URL: " + url + "\nchars: " + text.length + "\n\n" + text;
+    }
+  }));
+  ctx.tools.register(defineTool2({
+    name: "search_verify",
+    description: "Verify search-result URLs before citing them: HTTP status, redirect target, content kind, login wall (401/403), content-mill domain, primary-source domain. Never throws \u2014 an unreachable link is a result. Use after web_search/platform_search to drop dead and farm links; set read:true to also keep a bounded title/excerpt.",
+    parameters: {
+      urls: { type: "string", required: true, description: "URLs to verify, comma- or newline-separated (or a JSON array)" },
+      read: { type: "boolean", description: "also keep a bounded title/excerpt per page (default false)" },
+      timeoutMs: { type: "number", description: "per-URL timeout in ms (default 12000)" },
+      maxChars: { type: "number", description: "max excerpt chars when read is true (default 2000)" }
+    },
+    output: { schema: { type: "object", additionalProperties: true }, render: (_a, v) => [{ type: "text", text: JSON.stringify(v, null, 2) }] },
+    timeoutMs: 12e4,
+    async execute(args) {
+      const raw = args?.urls;
+      let urls = [];
+      if (Array.isArray(raw)) urls = raw.map(String);
+      else if (typeof raw === "string") {
+        const s = raw.trim();
+        if (s.startsWith("[")) {
+          try {
+            urls = JSON.parse(s).map(String);
+          } catch {
+            urls = s.split(/[\s,]+/);
+          }
+        } else {
+          urls = s.split(/[\s,]+/);
+        }
+      }
+      urls = urls.map((u) => u.trim()).filter(Boolean);
+      if (urls.length === 0) throw new Error("urls is required");
+      const links = await verifyMany(urls, {
+        read: args?.read === true,
+        timeoutMs: Number(args?.timeoutMs) || 12e3,
+        maxChars: Number(args?.maxChars) || 2e3
+      });
+      return { summary: summarize(links), links };
     }
   }));
   ctx.tools.register(defineTool2({
@@ -3205,8 +3522,12 @@ async function dispose() {
   resetStore();
 }
 export {
+  EngineBlockedError,
   apply,
+  detectRefusal,
   dispose,
   inject,
-  name
+  looksOffTopic,
+  name,
+  runSearchChain
 };
